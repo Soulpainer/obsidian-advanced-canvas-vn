@@ -1,11 +1,18 @@
 import { Notice } from "obsidian"
 import { Canvas, CanvasEdge, CanvasElement } from "src/@types/Canvas"
-import { DialogueAnswerChecksData, DialogueAnswerData, DialogueEdgeData } from "src/@types/DialogueCanvas"
+import {
+  DialogueAnswerChecksData,
+  DialogueAnswerConditionsData,
+  DialogueAnswerData,
+  DialogueEdgeData,
+} from "src/@types/DialogueCanvas"
 import CanvasHelper from "src/utils/canvas-helper"
 import CanvasExtension from "./canvas-extension"
 import EditDialogueAnswerModal from "src/modals/edit-dialogue-answer-modal"
 import EditDialogueChecksModal from "src/modals/edit-dialogue-checks-modal"
+import EditDialogueConditionsModal from "src/modals/edit-dialogue-conditions-modal"
 import DialogueStatsLoader from "src/utils/dialogue-stats-loader"
+import DialoguePropertiesLoader from "src/utils/dialogue-properties-loader"
 
 type CanvasEdgeDataWithDialogue = ReturnType<CanvasEdge["getData"]> & {
   label?: string
@@ -54,6 +61,16 @@ export default class DialogueAnswerCanvasExtension extends CanvasExtension {
         callback: () => this.openEditChecksModal(canvas, selectedEdges[0]!),
       })
     )
+
+    CanvasHelper.addPopupMenuOption(
+      canvas,
+      CanvasHelper.createPopupMenuOption({
+        id: "dialogue-canvas-edit-conditions",
+        icon: "list-filter",
+        label: "Edit Conditions",
+        callback: () => this.openEditConditionsModal(canvas, selectedEdges[0]!),
+      })
+    )
   }
 
   private getSelectedEdges(canvas: Canvas): CanvasEdge[] {
@@ -66,7 +83,7 @@ export default class DialogueAnswerCanvasExtension extends CanvasExtension {
     const edgeData = edge.getData() as CanvasEdgeDataWithDialogue
     const dialogueData = edgeData["x-dialogue"]?.answer
 
-    const cleanLabel = this.stripDicePrefix(edgeData.label ?? "")
+    const cleanLabel = this.stripLabelPrefixes(edgeData.label ?? "")
 
     const initialValue: DialogueAnswerData = {
       answerId:
@@ -82,6 +99,9 @@ export default class DialogueAnswerCanvasExtension extends CanvasExtension {
 
       checks:
         dialogueData?.checks,
+
+      conditions:
+        dialogueData?.conditions,
     }
 
     new EditDialogueAnswerModal(this.plugin.app as any, {
@@ -105,6 +125,24 @@ export default class DialogueAnswerCanvasExtension extends CanvasExtension {
     }).open()
   }
 
+  private async openEditConditionsModal(canvas: Canvas, edge: CanvasEdge) {
+    const edgeData = edge.getData() as CanvasEdgeDataWithDialogue
+
+    const [stats, properties] = await Promise.all([
+      DialogueStatsLoader.loadStats(this.plugin.app as any),
+      DialoguePropertiesLoader.loadProperties(this.plugin.app as any),
+    ])
+
+    new EditDialogueConditionsModal(this.plugin.app as any, {
+      stats,
+      properties,
+      initialValue: edgeData["x-dialogue"]?.answer?.conditions,
+      onSubmit: value => {
+        this.saveDialogueConditions(canvas, edge, value)
+      },
+    }).open()
+  }
+
   private saveDialogueAnswer(
     canvas: Canvas,
     edge: CanvasEdge,
@@ -118,24 +156,10 @@ export default class DialogueAnswerCanvasExtension extends CanvasExtension {
       text: answerData.text,
       hideWhenUnavailable: answerData.hideWhenUnavailable ?? true,
       checks: existingAnswer?.checks ?? answerData.checks,
+      conditions: existingAnswer?.conditions ?? answerData.conditions,
     }
 
-    const nextData: CanvasEdgeDataWithDialogue = {
-      ...edgeData,
-
-      label: this.buildEdgeLabel(nextAnswer),
-
-      "x-dialogue": {
-        ...edgeData["x-dialogue"],
-        answer: nextAnswer,
-      },
-    }
-
-    edge.setData(nextData)
-    canvas.pushHistory(canvas.getData())
-
-    new Notice("Dialogue Canvas: Answer saved")
-    console.log("[Dialogue Canvas] Saved answer data", nextData)
+    this.saveAnswerData(canvas, edge, nextAnswer, "Dialogue Canvas: Answer saved")
   }
 
   private saveDialogueChecks(
@@ -148,7 +172,7 @@ export default class DialogueAnswerCanvasExtension extends CanvasExtension {
 
     const cleanText =
       existingAnswer?.text ??
-      this.stripDicePrefix(edgeData.label ?? "")
+      this.stripLabelPrefixes(edgeData.label ?? "")
 
     const answerId =
       existingAnswer?.answerId ??
@@ -159,33 +183,86 @@ export default class DialogueAnswerCanvasExtension extends CanvasExtension {
       text: cleanText,
       hideWhenUnavailable: existingAnswer?.hideWhenUnavailable ?? true,
       checks,
+      conditions: existingAnswer?.conditions,
     }
+
+    this.saveAnswerData(canvas, edge, nextAnswer, "Dialogue Canvas: Checks saved")
+  }
+
+  private saveDialogueConditions(
+    canvas: Canvas,
+    edge: CanvasEdge,
+    conditions: DialogueAnswerConditionsData | undefined
+  ) {
+    const edgeData = edge.getData() as CanvasEdgeDataWithDialogue
+    const existingAnswer = edgeData["x-dialogue"]?.answer
+
+    const cleanText =
+      existingAnswer?.text ??
+      this.stripLabelPrefixes(edgeData.label ?? "")
+
+    const answerId =
+      existingAnswer?.answerId ??
+      this.generateAnswerId(cleanText)
+
+    const nextAnswer: DialogueAnswerData = {
+      answerId,
+      text: cleanText,
+      hideWhenUnavailable: existingAnswer?.hideWhenUnavailable ?? true,
+      checks: existingAnswer?.checks,
+      conditions,
+    }
+
+    this.saveAnswerData(canvas, edge, nextAnswer, "Dialogue Canvas: Conditions saved")
+  }
+
+  private saveAnswerData(
+    canvas: Canvas,
+    edge: CanvasEdge,
+    answer: DialogueAnswerData,
+    notice: string
+  ) {
+    const edgeData = edge.getData() as CanvasEdgeDataWithDialogue
 
     const nextData: CanvasEdgeDataWithDialogue = {
       ...edgeData,
 
-      label: this.buildEdgeLabel(nextAnswer),
+      label: this.buildEdgeLabel(answer),
 
       "x-dialogue": {
         ...edgeData["x-dialogue"],
-        answer: nextAnswer,
+        answer,
       },
     }
 
     edge.setData(nextData)
     canvas.pushHistory(canvas.getData())
 
-    new Notice("Dialogue Canvas: Checks saved")
-    console.log("[Dialogue Canvas] Saved checks", nextData)
+    new Notice(notice)
+    console.log("[Dialogue Canvas] Saved answer data", nextData)
   }
 
   private buildEdgeLabel(answer: DialogueAnswerData): string {
     const hasChecks = (answer.checks?.items?.length ?? 0) > 0
-    return hasChecks ? `🎲 ${answer.text}` : answer.text
+    const hasConditions = (answer.conditions?.items?.length ?? 0) > 0
+
+    const prefixes: string[] = []
+
+    if (hasChecks) {
+      prefixes.push("🎲")
+    }
+
+    if (hasConditions) {
+      prefixes.push("🔒")
+    }
+
+    return prefixes.length > 0
+      ? `${prefixes.join(" ")} ${answer.text}`
+      : answer.text
   }
 
-  private stripDicePrefix(label: string): string {
-    return label.replace(/^(🎲\s*)+/u, "")
+  private stripLabelPrefixes(label: string): string {
+    return label.replace(/^((🎲|🔒)\s*)+/u, "")
   }
 
   private generateAnswerId(label: string): string {
