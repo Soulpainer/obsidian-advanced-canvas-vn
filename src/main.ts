@@ -48,6 +48,7 @@ import FloatingEdgeCanvasExtension from './canvas-extensions/floating-edge-canva
 import EdgeHighlightCanvasExtension from './canvas-extensions/edge-highlight-canvas-extension'
 import CopyNodeReferenceCanvasExtension from './canvas-extensions/copy-node-reference-canvas-extension'
 import DialogueAnswerCanvasExtension from './canvas-extensions/dialogue-answer-canvas-extension'
+import DialogueFrameCanvasExtension from './canvas-extensions/dialogue-frame-canvas-extension'
 
 // Advanced Styles
 import NodeStylesExtension from './canvas-extensions/advanced-styles/node-styles'
@@ -110,6 +111,7 @@ const CANVAS_EXTENSIONS: typeof CanvasExtension[] = [
   VariableBreakpointCanvasExtension,
   EdgeHighlightCanvasExtension,
   AutoFileNodeEdgesCanvasExtension,
+  DialogueFrameCanvasExtension,
   DialogueAnswerCanvasExtension,
   FlipEdgeCanvasExtension,
   ZOrderingCanvasExtension,

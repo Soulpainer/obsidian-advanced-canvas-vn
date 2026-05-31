@@ -12,3 +12,77 @@
 @use "styles/presentation";
 @use "styles/portals";
 @use "styles/embeds";
+
+.canvas-node.dialogue-canvas-frame-node {
+  overflow: visible;
+}
+
+.canvas-node > .dialogue-canvas-character-badge {
+    position: absolute;
+    left: -64px;
+    top: 0;
+    min-height: 92px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    /* gap: 6px; */
+    pointer-events: none;
+    user-select: none;
+    z-index: -1;
+    color: var(--text-normal);
+    min-width: 74px;
+}
+
+.dialogue-canvas-character-portrait {
+    width: 64px;
+    height: 64px;
+    border-radius: 0px;
+    border-top-left-radius: 14px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+    background: var(--background-secondary);
+    border: 2px solid var(--dialogue-character-color, var(--interactive-accent));
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.22);
+    font-size: 20px;
+    font-weight: 700;
+}
+
+.dialogue-canvas-character-portrait img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.dialogue-canvas-character-name {
+    width: 64px;
+    padding: 2px 6px;
+    border-radius: 0;
+    border-bottom-left-radius: 14px;
+    background: var(--dialogue-character-color, var(--background-secondary));
+    color: white;
+    font-size: 8px;
+    font-weight: 700;
+    line-height: 1.2;
+    text-align: left;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+    overflow: hidden;
+    white-space: normal;
+}
+
+.dialogue-canvas-modal-textarea-container {
+  margin: 18px 0;
+}
+
+.dialogue-canvas-modal-label {
+  display: block;
+  margin-bottom: 8px;
+  font-weight: 600;
+}
+
+.dialogue-canvas-modal-textarea {
+  width: 100%;
+  min-height: 160px;
+  resize: vertical;
+}

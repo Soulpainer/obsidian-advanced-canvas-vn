@@ -16,6 +16,24 @@ export interface DialoguePropertyDefinition {
   description?: string
 }
 
+export interface DialogueCharacterDefinition {
+  id: string
+  name: string
+  portrait?: string
+  color?: string
+  description?: string
+}
+
+export interface DialogueFrameData {
+  frameId: string
+  speakerId?: string
+  text: string
+}
+
+export interface DialogueNodeData {
+  frame?: DialogueFrameData
+}
+
 export type DialogueChecksMode = "all" | "any"
 
 export interface DialogueAnswerCheckItem {
