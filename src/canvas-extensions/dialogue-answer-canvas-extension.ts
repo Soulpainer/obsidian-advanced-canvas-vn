@@ -1,9 +1,11 @@
 import { Notice } from "obsidian"
 import { Canvas, CanvasEdge, CanvasElement } from "src/@types/Canvas"
-import { DialogueEdgeData, DialogueAnswerData } from "src/@types/DialogueCanvas"
+import { DialogueAnswerChecksData, DialogueAnswerData, DialogueEdgeData } from "src/@types/DialogueCanvas"
 import CanvasHelper from "src/utils/canvas-helper"
 import CanvasExtension from "./canvas-extension"
 import EditDialogueAnswerModal from "src/modals/edit-dialogue-answer-modal"
+import EditDialogueChecksModal from "src/modals/edit-dialogue-checks-modal"
+import DialogueStatsLoader from "src/utils/dialogue-stats-loader"
 
 type CanvasEdgeDataWithDialogue = ReturnType<CanvasEdge["getData"]> & {
   label?: string
@@ -42,6 +44,16 @@ export default class DialogueAnswerCanvasExtension extends CanvasExtension {
         callback: () => this.openEditAnswerModal(canvas, selectedEdges[0]!),
       })
     )
+
+    CanvasHelper.addPopupMenuOption(
+      canvas,
+      CanvasHelper.createPopupMenuOption({
+        id: "dialogue-canvas-edit-checks",
+        icon: "dice-5",
+        label: "Edit Checks",
+        callback: () => this.openEditChecksModal(canvas, selectedEdges[0]!),
+      })
+    )
   }
 
   private getSelectedEdges(canvas: Canvas): CanvasEdge[] {
@@ -54,24 +66,41 @@ export default class DialogueAnswerCanvasExtension extends CanvasExtension {
     const edgeData = edge.getData() as CanvasEdgeDataWithDialogue
     const dialogueData = edgeData["x-dialogue"]?.answer
 
+    const cleanLabel = this.stripDicePrefix(edgeData.label ?? "")
+
     const initialValue: DialogueAnswerData = {
       answerId:
         dialogueData?.answerId ??
-        this.generateAnswerId(edgeData.label ?? ""),
+        this.generateAnswerId(cleanLabel),
 
       text:
         dialogueData?.text ??
-        edgeData.label ??
-        "",
+        cleanLabel,
 
       hideWhenUnavailable:
         dialogueData?.hideWhenUnavailable ?? true,
+
+      checks:
+        dialogueData?.checks,
     }
 
-    new EditDialogueAnswerModal(this.plugin.app, {
+    new EditDialogueAnswerModal(this.plugin.app as any, {
       initialValue,
       onSubmit: value => {
         this.saveDialogueAnswer(canvas, edge, value)
+      },
+    }).open()
+  }
+
+  private async openEditChecksModal(canvas: Canvas, edge: CanvasEdge) {
+    const edgeData = edge.getData() as CanvasEdgeDataWithDialogue
+    const stats = await DialogueStatsLoader.loadStats(this.plugin.app as any)
+
+    new EditDialogueChecksModal(this.plugin.app as any, {
+      stats,
+      initialValue: edgeData["x-dialogue"]?.answer?.checks,
+      onSubmit: value => {
+        this.saveDialogueChecks(canvas, edge, value)
       },
     }).open()
   }
@@ -82,21 +111,23 @@ export default class DialogueAnswerCanvasExtension extends CanvasExtension {
     answerData: DialogueAnswerData
   ) {
     const edgeData = edge.getData() as CanvasEdgeDataWithDialogue
+    const existingAnswer = edgeData["x-dialogue"]?.answer
+
+    const nextAnswer: DialogueAnswerData = {
+      answerId: answerData.answerId,
+      text: answerData.text,
+      hideWhenUnavailable: answerData.hideWhenUnavailable ?? true,
+      checks: existingAnswer?.checks ?? answerData.checks,
+    }
 
     const nextData: CanvasEdgeDataWithDialogue = {
       ...edgeData,
 
-      // Важно: label остаётся обычной подписью стрелки в Canvas.
-      label: answerData.text,
+      label: this.buildEdgeLabel(nextAnswer),
 
-      // А игровые данные храним отдельно.
       "x-dialogue": {
         ...edgeData["x-dialogue"],
-        answer: {
-          answerId: answerData.answerId,
-          text: answerData.text,
-          hideWhenUnavailable: answerData.hideWhenUnavailable ?? true,
-        },
+        answer: nextAnswer,
       },
     }
 
@@ -105,6 +136,56 @@ export default class DialogueAnswerCanvasExtension extends CanvasExtension {
 
     new Notice("Dialogue Canvas: Answer saved")
     console.log("[Dialogue Canvas] Saved answer data", nextData)
+  }
+
+  private saveDialogueChecks(
+    canvas: Canvas,
+    edge: CanvasEdge,
+    checks: DialogueAnswerChecksData | undefined
+  ) {
+    const edgeData = edge.getData() as CanvasEdgeDataWithDialogue
+    const existingAnswer = edgeData["x-dialogue"]?.answer
+
+    const cleanText =
+      existingAnswer?.text ??
+      this.stripDicePrefix(edgeData.label ?? "")
+
+    const answerId =
+      existingAnswer?.answerId ??
+      this.generateAnswerId(cleanText)
+
+    const nextAnswer: DialogueAnswerData = {
+      answerId,
+      text: cleanText,
+      hideWhenUnavailable: existingAnswer?.hideWhenUnavailable ?? true,
+      checks,
+    }
+
+    const nextData: CanvasEdgeDataWithDialogue = {
+      ...edgeData,
+
+      label: this.buildEdgeLabel(nextAnswer),
+
+      "x-dialogue": {
+        ...edgeData["x-dialogue"],
+        answer: nextAnswer,
+      },
+    }
+
+    edge.setData(nextData)
+    canvas.pushHistory(canvas.getData())
+
+    new Notice("Dialogue Canvas: Checks saved")
+    console.log("[Dialogue Canvas] Saved checks", nextData)
+  }
+
+  private buildEdgeLabel(answer: DialogueAnswerData): string {
+    const hasChecks = (answer.checks?.items?.length ?? 0) > 0
+    return hasChecks ? `🎲 ${answer.text}` : answer.text
+  }
+
+  private stripDicePrefix(label: string): string {
+    return label.replace(/^(🎲\s*)+/u, "")
   }
 
   private generateAnswerId(label: string): string {

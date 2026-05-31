@@ -10,17 +10,18 @@ export default class EditDialogueAnswerModal extends Modal {
   private value: DialogueAnswerData
   private readonly onSubmitCallback: (value: DialogueAnswerData) => void
 
-constructor(app: any, options: EditDialogueAnswerModalOptions) {
-  super(app)
+  constructor(app: any, options: EditDialogueAnswerModalOptions) {
+    super(app)
 
-  this.value = {
-    answerId: options.initialValue.answerId ?? "",
-    text: options.initialValue.text ?? "",
-    hideWhenUnavailable: options.initialValue.hideWhenUnavailable ?? true,
+    this.value = {
+      answerId: options.initialValue.answerId ?? "",
+      text: options.initialValue.text ?? "",
+      hideWhenUnavailable: options.initialValue.hideWhenUnavailable ?? true,
+      checks: options.initialValue.checks,
+    }
+
+    this.onSubmitCallback = options.onSubmit
   }
-
-  this.onSubmitCallback = options.onSubmit
-}
 
   onOpen() {
     const { contentEl } = this
@@ -90,6 +91,7 @@ constructor(app: any, options: EditDialogueAnswerModalOptions) {
               answerId: this.value.answerId,
               text: this.value.text,
               hideWhenUnavailable: this.value.hideWhenUnavailable ?? true,
+              checks: this.value.checks,
             })
 
             this.close()
