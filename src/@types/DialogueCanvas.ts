@@ -24,12 +24,6 @@ export interface DialogueCharacterDefinition {
   description?: string
 }
 
-export interface DialogueFrameData {
-  frameId: string
-  speakerId?: string
-  text: string
-}
-
 export interface DialogueNodeData {
   frame?: DialogueFrameData
 }
@@ -73,14 +67,43 @@ export interface DialogueAnswerConditionsData {
   items: DialogueAnswerConditionItem[]
 }
 
+export interface DialogueEdgeData {
+  answer?: DialogueAnswerData
+  route?: DialogueFailureRouteData
+}
+
+export interface DialogueFrameData {
+  frameId: string
+  speakerId?: string
+}
+
+export interface DialogueFrameEditorValue extends DialogueFrameData {
+  text: string
+}
+
+export interface DialogueNodeData {
+  frame?: DialogueFrameData
+}
+
 export interface DialogueAnswerData {
   answerId: string
-  text: string
   hideWhenUnavailable?: boolean
   checks?: DialogueAnswerChecksData
   conditions?: DialogueAnswerConditionsData
 }
 
-export interface DialogueEdgeData {
-  answer?: DialogueAnswerData
+export interface DialogueAnswerEditorValue extends DialogueAnswerData {
+  text: string
+}
+
+export type DialogueRouteType = "failure"
+
+export interface DialogueFailureRouteData {
+  type: DialogueRouteType
+  answerId: string
+  statId?: string
+}
+
+export interface DialogueRouteData {
+  route?: DialogueFailureRouteData
 }

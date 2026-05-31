@@ -1,14 +1,14 @@
 import { ButtonComponent, Modal, Notice, Setting } from "obsidian"
-import { DialogueAnswerData } from "src/@types/DialogueCanvas"
+import { DialogueAnswerEditorValue } from "src/@types/DialogueCanvas"
 
 export interface EditDialogueAnswerModalOptions {
-  initialValue: DialogueAnswerData
-  onSubmit: (value: DialogueAnswerData) => void
+  initialValue: DialogueAnswerEditorValue
+  onSubmit: (value: DialogueAnswerEditorValue) => void
 }
 
 export default class EditDialogueAnswerModal extends Modal {
-  private value: DialogueAnswerData
-  private readonly onSubmitCallback: (value: DialogueAnswerData) => void
+  private value: DialogueAnswerEditorValue
+  private readonly onSubmitCallback: (value: DialogueAnswerEditorValue) => void
 
   constructor(app: any, options: EditDialogueAnswerModalOptions) {
     super(app)

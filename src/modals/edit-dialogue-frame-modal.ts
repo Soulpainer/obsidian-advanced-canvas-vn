@@ -1,26 +1,26 @@
 import { ButtonComponent, Modal, Notice, Setting } from "obsidian"
 import {
   DialogueCharacterDefinition,
-  DialogueFrameData,
+  DialogueFrameEditorValue,
 } from "src/@types/DialogueCanvas"
 
 export interface EditDialogueFrameModalOptions {
-  initialValue: DialogueFrameData
+  initialValue: DialogueFrameEditorValue
   characters: DialogueCharacterDefinition[]
-  onSubmit: (value: DialogueFrameData) => void
+  onSubmit: (value: DialogueFrameEditorValue) => void
 }
 
 export default class EditDialogueFrameModal extends Modal {
-  private value: DialogueFrameData
+  private value: DialogueFrameEditorValue
   private readonly characters: DialogueCharacterDefinition[]
-  private readonly onSubmitCallback: (value: DialogueFrameData) => void
+  private readonly onSubmitCallback: (value: DialogueFrameEditorValue) => void
 
   constructor(app: any, options: EditDialogueFrameModalOptions) {
     super(app)
 
     this.value = {
       frameId: options.initialValue.frameId ?? "",
-      speakerId: options.initialValue.speakerId ?? "",
+      speakerId: options.initialValue.speakerId,
       text: options.initialValue.text ?? "",
     }
 

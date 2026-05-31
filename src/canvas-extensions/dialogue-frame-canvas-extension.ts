@@ -2,7 +2,7 @@ import { Notice, TFile } from "obsidian"
 import { Canvas, CanvasElement, CanvasNode } from "src/@types/Canvas"
 import {
   DialogueCharacterDefinition,
-  DialogueFrameData,
+  DialogueFrameEditorValue,
   DialogueNodeData,
 } from "src/@types/DialogueCanvas"
 import CanvasHelper from "src/utils/canvas-helper"
@@ -14,11 +14,19 @@ type CanvasNodeDataWithDialogue = ReturnType<CanvasNode["getData"]> & {
   id: string
   type?: string
   text?: string
+  height?: number
+  color?: string
   ["x-dialogue"]?: DialogueNodeData
 }
 
 export default class DialogueFrameCanvasExtension extends CanvasExtension {
   private renderQueued = false
+
+  // Минимальная высота карточки, если у неё есть speaker.
+  // Подгони под свой шаг сетки.
+  private readonly minSpeakerNodeHeight = 160
+
+  private readonly observedCanvasWrappers = new WeakSet<HTMLElement>()
 
   isEnabled() {
     return true
@@ -44,12 +52,6 @@ export default class DialogueFrameCanvasExtension extends CanvasExtension {
       this.plugin.app.workspace.on("active-leaf-change", () => {
         this.scheduleRenderAllCanvases()
       })
-    )
-
-    this.plugin.registerInterval(
-      window.setInterval(() => {
-        this.scheduleRenderAllCanvases()
-      }, 2000)
     )
 
     this.scheduleRenderAllCanvases()
@@ -100,21 +102,21 @@ export default class DialogueFrameCanvasExtension extends CanvasExtension {
 
   private async openEditFrameModal(canvas: Canvas, node: CanvasNode) {
     const nodeData = node.getData() as CanvasNodeDataWithDialogue
-    const frameData = nodeData["x-dialogue"]?.frame
+    const frameMeta = nodeData["x-dialogue"]?.frame
     const characters = await DialogueCharactersLoader.loadCharacters(this.plugin.app as any)
 
-    const initialValue: DialogueFrameData = {
+    const initialValue: DialogueFrameEditorValue = {
       frameId:
-        frameData?.frameId ??
+        frameMeta?.frameId ??
         this.generateFrameId(nodeData.text ?? nodeData.id),
 
       speakerId:
-        frameData?.speakerId,
+        frameMeta?.speakerId,
 
+      // Текст фрейма живёт только в node.text.
+      // x-dialogue.frame.text больше не читаем.
       text:
-        frameData?.text ??
-        nodeData.text ??
-        "",
+        nodeData.text ?? "",
     }
 
     new EditDialogueFrameModal(this.plugin.app as any, {
@@ -129,22 +131,24 @@ export default class DialogueFrameCanvasExtension extends CanvasExtension {
   private saveDialogueFrame(
     canvas: Canvas,
     node: CanvasNode,
-    frameData: DialogueFrameData
+    editorValue: DialogueFrameEditorValue
   ) {
     const nodeData = node.getData() as CanvasNodeDataWithDialogue
+    const adjustedData = this.applySpeakerMinHeight(nodeData, editorValue)
 
     const nextData: CanvasNodeDataWithDialogue = {
       ...nodeData,
+      ...adjustedData,
 
-      // Текст самой Obsidian-карточки оставляем чистой репликой.
-      text: frameData.text,
+      // Единственное место хранения текста реплики.
+      text: editorValue.text,
 
+      // Только metadata. Текста здесь быть не должно.
       "x-dialogue": {
         ...nodeData["x-dialogue"],
         frame: {
-          frameId: frameData.frameId,
-          speakerId: frameData.speakerId,
-          text: frameData.text,
+          frameId: editorValue.frameId,
+          speakerId: editorValue.speakerId,
         },
       },
     }
@@ -156,6 +160,26 @@ export default class DialogueFrameCanvasExtension extends CanvasExtension {
     console.log("[Dialogue Canvas] Saved frame data", nextData)
 
     this.scheduleRenderCanvas(canvas)
+  }
+
+  private applySpeakerMinHeight(
+    nodeData: CanvasNodeDataWithDialogue,
+    editorValue: DialogueFrameEditorValue
+  ): Partial<CanvasNodeDataWithDialogue> {
+    const hasSpeaker = Boolean(editorValue.speakerId)
+    const currentHeight = nodeData.height
+
+    if (!hasSpeaker || typeof currentHeight !== "number") {
+      return {}
+    }
+
+    if (currentHeight >= this.minSpeakerNodeHeight) {
+      return {}
+    }
+
+    return {
+      height: this.minSpeakerNodeHeight,
+    }
   }
 
   private scheduleRenderAllCanvases() {
@@ -179,7 +203,6 @@ export default class DialogueFrameCanvasExtension extends CanvasExtension {
 
   private async renderAllCanvases() {
     const canvases = this.plugin.getCanvases?.() ?? []
-
     const characters = await DialogueCharactersLoader.loadCharacters(this.plugin.app as any)
 
     for (const canvas of canvases) {
@@ -196,11 +219,58 @@ export default class DialogueFrameCanvasExtension extends CanvasExtension {
     canvas: Canvas,
     characters: DialogueCharacterDefinition[]
   ) {
+    this.ensureCanvasObserver(canvas)
+
     const nodes = this.getCanvasNodes(canvas)
 
     for (const node of nodes) {
       this.renderNodeBadge(canvas, node, characters)
     }
+  }
+
+  private ensureCanvasObserver(canvas: Canvas) {
+    const wrapperEl = (canvas as any).wrapperEl as HTMLElement | undefined
+
+    if (!wrapperEl || this.observedCanvasWrappers.has(wrapperEl)) {
+      return
+    }
+
+    this.observedCanvasWrappers.add(wrapperEl)
+
+    const observer = new MutationObserver(mutations => {
+      const hasRelevantMutation = mutations.some(mutation => {
+        const target = mutation.target
+
+        if (!(target instanceof HTMLElement)) {
+          return false
+        }
+
+        // Игнорируем собственные изменения бейджа, чтобы не гонять цикл.
+        if (target.closest(".dialogue-canvas-character-badge")) {
+          return false
+        }
+
+        return (
+          target.classList.contains("canvas-node") ||
+          target.closest(".canvas-node") !== null
+        )
+      })
+
+      if (hasRelevantMutation) {
+        this.scheduleRenderCanvas(canvas)
+      }
+    })
+
+    observer.observe(wrapperEl, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: ["class", "style"],
+    })
+
+    this.plugin.register(() => {
+      observer.disconnect()
+    })
   }
 
   private getCanvasNodes(canvas: Canvas): CanvasNode[] {
@@ -225,8 +295,8 @@ export default class DialogueFrameCanvasExtension extends CanvasExtension {
       return
     }
 
-    const frameData = nodeData["x-dialogue"]?.frame
-    const speakerId = frameData?.speakerId
+    const frameMeta = nodeData["x-dialogue"]?.frame
+    const speakerId = frameMeta?.speakerId
 
     if (!speakerId) {
       nodeEl.querySelector(":scope > .dialogue-canvas-character-badge")?.remove()
@@ -242,11 +312,13 @@ export default class DialogueFrameCanvasExtension extends CanvasExtension {
       return
     }
 
+    const badgeColor = this.getNodeAccentColor(nodeData, nodeEl, character)
+
     const badgeKey = JSON.stringify({
       speakerId: character.id,
       name: character.name,
       portrait: character.portrait ?? "",
-      color: character.color ?? "",
+      color: badgeColor ?? character.color ?? "",
     })
 
     const existingBadge = nodeEl.querySelector(
@@ -265,10 +337,10 @@ export default class DialogueFrameCanvasExtension extends CanvasExtension {
     badge.addClass("dialogue-canvas-character-badge")
     badge.dataset.dialogueBadgeKey = badgeKey
 
-    const badgeColor = this.getNodeAccentColor(nodeData, nodeEl, character)
+    badge.style.removeProperty("--dialogue-character-color")
 
     if (badgeColor) {
-    badge.style.setProperty("--dialogue-character-color", badgeColor)
+      badge.style.setProperty("--dialogue-character-color", badgeColor)
     }
 
     const portraitEl = badge.createDiv()
@@ -331,6 +403,155 @@ export default class DialogueFrameCanvasExtension extends CanvasExtension {
         element.getAttribute("data-node-id") === nodeData.id
       )
     }) ?? null
+  }
+
+  private getNodeAccentColor(
+    nodeData: CanvasNodeDataWithDialogue,
+    nodeEl: HTMLElement,
+    character: DialogueCharacterDefinition
+  ): string | undefined {
+    const rawNodeColor = nodeData.color
+
+    const nodeDataColor = this.normalizeCanvasColor(rawNodeColor)
+    if (nodeDataColor) {
+      return nodeDataColor
+    }
+
+    const computedColor = this.getComputedNodeColor(nodeEl)
+    if (computedColor) {
+      return computedColor
+    }
+
+    if (this.isUsableCssColor(character.color)) {
+      return character.color
+    }
+
+    return undefined
+  }
+
+  private normalizeCanvasColor(value: unknown): string | undefined {
+    if (typeof value !== "string") {
+      return undefined
+    }
+
+    const color = value.trim()
+
+    if (!color) {
+      return undefined
+    }
+
+    if (this.isUsableCssColor(color)) {
+      return color
+    }
+
+    // Если Obsidian хранит цвет как индекс "1", "2" и т.п.,
+    // не возвращаем var(...), потому что он может быть невалиден вне ноды.
+    return undefined
+  }
+
+  private getComputedNodeColor(nodeEl: HTMLElement): string | undefined {
+    const candidates: HTMLElement[] = [
+      nodeEl,
+      nodeEl.querySelector(".canvas-node-container") as HTMLElement,
+      nodeEl.querySelector(".canvas-node-content") as HTMLElement,
+    ].filter((element): element is HTMLElement => element instanceof HTMLElement)
+
+    for (const element of candidates) {
+      const style = getComputedStyle(element)
+
+      const shadowVariables = [
+        "--shadow-border-themed",
+        "--shadow-border-themed-inset",
+        "--shadow-border-accent",
+        "--shadow-border-accent-inset",
+      ]
+
+      for (const variableName of shadowVariables) {
+        const rawValue = style.getPropertyValue(variableName).trim()
+        const extractedColor = this.extractColorFromCssValue(rawValue)
+
+        if (extractedColor) {
+          return extractedColor
+        }
+      }
+
+      const directColors = [
+        style.borderTopColor,
+        style.borderRightColor,
+        style.borderBottomColor,
+        style.borderLeftColor,
+        style.outlineColor,
+      ]
+
+      for (const color of directColors) {
+        if (this.isUsableCssColor(color)) {
+          return color
+        }
+      }
+    }
+
+    return undefined
+  }
+
+  private extractColorFromCssValue(value: string | undefined): string | undefined {
+    if (!value) {
+      return undefined
+    }
+
+    const trimmed = value.trim()
+
+    if (this.isUsableCssColor(trimmed)) {
+      return trimmed
+    }
+
+    const rgbMatch = trimmed.match(/rgba?\([^)]+\)/i)
+    if (rgbMatch) {
+      return rgbMatch[0]
+    }
+
+    const hslMatch = trimmed.match(/hsla?\([^)]+\)/i)
+    if (hslMatch) {
+      return hslMatch[0]
+    }
+
+    const hexMatch = trimmed.match(/#[0-9a-f]{3,8}\b/i)
+    if (hexMatch) {
+      return hexMatch[0]
+    }
+
+    return undefined
+  }
+
+  private isUsableCssColor(value: string | undefined): value is string {
+    if (!value) {
+      return false
+    }
+
+    const color = value.trim().toLowerCase()
+
+    if (
+      color.length === 0 ||
+      color === "transparent" ||
+      color === "rgba(0, 0, 0, 0)" ||
+      color === "rgba(0,0,0,0)" ||
+      color === "initial" ||
+      color === "inherit" ||
+      color === "unset"
+    ) {
+      return false
+    }
+
+    if (color.startsWith("var(")) {
+      return false
+    }
+
+    return (
+      color.startsWith("#") ||
+      color.startsWith("rgb(") ||
+      color.startsWith("rgba(") ||
+      color.startsWith("hsl(") ||
+      color.startsWith("hsla(")
+    )
   }
 
   private resolveVaultImagePath(path: string): string {
@@ -401,196 +622,4 @@ export default class DialogueFrameCanvasExtension extends CanvasExtension {
 
     return normalized.slice(0, 48) || "frame"
   }
-private getNodeAccentColor(
-  nodeData: CanvasNodeDataWithDialogue,
-  nodeEl: HTMLElement,
-  character: DialogueCharacterDefinition
-): string | undefined {
-  const rawNodeColor = (nodeData as any).color
-
-  const nodeDataColor = this.normalizeCanvasColor(rawNodeColor, nodeEl)
-  if (nodeDataColor) {
-    return nodeDataColor
-  }
-
-  const computedColor = this.getComputedNodeColor(nodeEl)
-  if (computedColor) {
-    return computedColor
-  }
-
-  if (this.isUsableCssColor(character.color)) {
-    return character.color
-  }
-
-  return undefined
-}
-
-private normalizeCanvasColor(
-  value: unknown,
-  nodeEl: HTMLElement
-): string | undefined {
-  if (typeof value !== "string") {
-    return undefined
-  }
-
-  const color = value.trim()
-
-  if (!color) {
-    return undefined
-  }
-
-  if (this.isUsableCssColor(color)) {
-    return color
-  }
-
-  // Obsidian Canvas часто хранит пресетный цвет как "1", "2", "3"...
-  // Но нельзя просто вернуть var(--canvas-color-1), потому что переменная может быть не определена.
-  if (/^\d+$/.test(color)) {
-    return this.resolveCssVariableColor(nodeEl, [
-      `--canvas-color-${color}`,
-      `--canvas-color-${color}-rgb`,
-      `--color-${color}`,
-    ])
-  }
-
-  return undefined
-}
-private getComputedNodeColor(nodeEl: HTMLElement): string | undefined {
-  const candidates: HTMLElement[] = [
-    nodeEl,
-    nodeEl.querySelector(".canvas-node-container") as HTMLElement,
-    nodeEl.querySelector(".canvas-node-content") as HTMLElement,
-  ].filter((element): element is HTMLElement => element instanceof HTMLElement)
-
-  for (const element of candidates) {
-    const style = getComputedStyle(element)
-
-    const shadowVariables = [
-      "--shadow-border-themed",
-      "--shadow-border-themed-inset",
-      "--shadow-border-accent",
-      "--shadow-border-accent-inset",
-    ]
-
-    for (const variableName of shadowVariables) {
-      const rawValue = style.getPropertyValue(variableName).trim()
-      const extractedColor = this.extractColorFromCssValue(rawValue)
-
-      if (extractedColor) {
-        return extractedColor
-      }
-    }
-
-    const directColors = [
-      style.borderTopColor,
-      style.borderRightColor,
-      style.borderBottomColor,
-      style.borderLeftColor,
-      style.outlineColor,
-    ]
-
-    for (const color of directColors) {
-      if (this.isUsableCssColor(color)) {
-        return color
-      }
-    }
-  }
-
-  return undefined
-}
-
-private resolveCssVariableColor(
-  element: HTMLElement,
-  variableNames: string[]
-): string | undefined {
-  const candidates: HTMLElement[] = [
-    element,
-    activeDocument.body,
-    activeDocument.documentElement,
-  ]
-
-  for (const candidate of candidates) {
-    const style = getComputedStyle(candidate)
-
-    for (const variableName of variableNames) {
-      const value = style.getPropertyValue(variableName).trim()
-
-      if (!value) {
-        continue
-      }
-
-      // Некоторые темы могут хранить rgb-компоненты как "255, 100, 50".
-      if (/^\d+\s*,\s*\d+\s*,\s*\d+/.test(value)) {
-        return `rgb(${value})`
-      }
-
-      if (this.isUsableCssColor(value)) {
-        return value
-      }
-    }
-  }
-
-  return undefined
-}
-
-private isUsableCssColor(value: string | undefined): value is string {
-  if (!value) {
-    return false
-  }
-
-  const color = value.trim().toLowerCase()
-
-  if (
-    color.length === 0 ||
-    color === "transparent" ||
-    color === "rgba(0, 0, 0, 0)" ||
-    color === "rgba(0,0,0,0)" ||
-    color === "initial" ||
-    color === "inherit" ||
-    color === "unset"
-  ) {
-    return false
-  }
-
-  if (color.startsWith("var(")) {
-    return false
-  }
-
-  return (
-    color.startsWith("#") ||
-    color.startsWith("rgb(") ||
-    color.startsWith("rgba(") ||
-    color.startsWith("hsl(") ||
-    color.startsWith("hsla(")
-  )
-}
-
-private extractColorFromCssValue(value: string | undefined): string | undefined {
-  if (!value) {
-    return undefined
-  }
-
-  const trimmed = value.trim()
-
-  if (this.isUsableCssColor(trimmed)) {
-    return trimmed
-  }
-
-  const rgbMatch = trimmed.match(/rgba?\([^)]+\)/i)
-  if (rgbMatch) {
-    return rgbMatch[0]
-  }
-
-  const hslMatch = trimmed.match(/hsla?\([^)]+\)/i)
-  if (hslMatch) {
-    return hslMatch[0]
-  }
-
-  const hexMatch = trimmed.match(/#[0-9a-f]{3,8}\b/i)
-  if (hexMatch) {
-    return hexMatch[0]
-  }
-
-  return undefined
-}
 }

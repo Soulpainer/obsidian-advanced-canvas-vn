@@ -11,9 +11,9 @@ import {
 } from "src/@types/DialogueCanvas"
 
 export interface EditDialogueConditionsModalOptions {
-  initialValue?: DialogueAnswerConditionsData
   stats: DialogueStatDefinition[]
   properties: DialoguePropertyDefinition[]
+  initialValue?: DialogueAnswerConditionsData
   onSubmit: (value: DialogueAnswerConditionsData | undefined) => void
 }
 
@@ -101,7 +101,7 @@ export default class EditDialogueConditionsModal extends Modal {
             const nextSource = value as DialogueConditionSource
             target.source = nextSource
             target.id = this.getDefaultIdForSource(nextSource)
-            target.op = "=="
+            target.op = nextSource === "stat" ? ">=" : "=="
             target.value = this.getDefaultValueForItem(target)
 
             this.render()
@@ -150,7 +150,7 @@ export default class EditDialogueConditionsModal extends Modal {
             target.op = value as DialogueConditionOperator
 
             if (target.op === "exists" || target.op === "notExists") {
-              target.value = undefined
+              delete target.value
             } else if (target.value === undefined) {
               target.value = this.getDefaultValueForItem(target)
             }
