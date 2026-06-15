@@ -3,7 +3,9 @@ import { Canvas, CanvasElement, CanvasNode } from "src/@types/Canvas"
 import {
   DialogueCharacterDefinition,
   DialogueChoiceData,
+  DialogueChoiceRouteOutcome,
   DialogueFrameEditorValue,
+  DialogueFailureRouteData,
   DialogueNodeData,
 } from "src/@types/DialogueCanvas"
 import CanvasHelper from "src/utils/canvas-helper"
@@ -17,9 +19,17 @@ type CanvasNodeDataWithDialogue = ReturnType<CanvasNode["getData"]> & {
   id: string
   type?: string
   text?: string
+  width?: number
   height?: number
   color?: string
   ["x-dialogue"]?: DialogueNodeData
+}
+
+type CanvasEdgeDataWithDialogue = {
+  fromNode?: string
+  ["x-dialogue"]?: {
+    route?: DialogueFailureRouteData
+  }
 }
 
 export default class DialogueFrameCanvasExtension extends CanvasExtension {
@@ -28,7 +38,12 @@ export default class DialogueFrameCanvasExtension extends CanvasExtension {
   // Минимальная высота карточки, если у неё есть speaker.
   // Подгони под свой шаг сетки.
   private readonly minSpeakerNodeHeight = 160
-  private readonly minChoiceNodeHeight = 220
+  private readonly minFrameContentHeight = 120
+  private readonly choicesTopGap = 12
+  private readonly choiceRowHeight = 30
+  private readonly choiceFailureRowHeight = 24
+  private readonly choicesBottomPadding = 12
+  private readonly minDialogueNodeWidth = 280
 
   private readonly observedCanvasWrappers = new WeakSet<HTMLElement>()
 
@@ -53,10 +68,27 @@ export default class DialogueFrameCanvasExtension extends CanvasExtension {
     )
 
     this.plugin.registerEvent(
+      this.plugin.app.workspace.on("advanced-canvas:node-resized", (canvas: Canvas, node: CanvasNode) => {
+        this.enforceDialogueNodeMinSize(canvas, node)
+      })
+    )
+
+    this.plugin.registerEvent(
+      this.plugin.app.workspace.on("advanced-canvas:double-click", (canvas: Canvas, event: MouseEvent, preventDefault) => {
+        this.openDialogueFrameFromDoubleClick(canvas, event, preventDefault)
+      })
+    )
+
+    this.plugin.registerEvent(
       this.plugin.app.workspace.on("active-leaf-change", () => {
         this.scheduleRenderAllCanvases()
       })
     )
+
+    const rerenderCanvas = (canvas: Canvas) => this.scheduleRenderCanvas(canvas)
+    this.plugin.registerEvent(this.plugin.app.workspace.on("advanced-canvas:edge-created", rerenderCanvas))
+    this.plugin.registerEvent(this.plugin.app.workspace.on("advanced-canvas:edge-changed", rerenderCanvas))
+    this.plugin.registerEvent(this.plugin.app.workspace.on("advanced-canvas:edge-removed", rerenderCanvas))
 
     this.scheduleRenderAllCanvases()
   }
@@ -179,6 +211,72 @@ export default class DialogueFrameCanvasExtension extends CanvasExtension {
     this.scheduleRenderCanvas(canvas)
   }
 
+  // LLM agent change: users can resize canvas nodes manually, so dialogue frames clamp back to embedded content size.
+  private enforceDialogueNodeMinSize(canvas: Canvas, node: CanvasNode) {
+    const nodeData = node.getData() as CanvasNodeDataWithDialogue
+    const frame = nodeData["x-dialogue"]?.frame
+
+    if (!frame) {
+      return
+    }
+
+    const minHeight = Math.max(
+      frame.speakerId ? this.minSpeakerNodeHeight : 0,
+      this.getMinimumNodeHeightForChoices(frame.choices ?? [])
+    )
+    const minWidth = (frame.choices?.length ?? 0) > 0 || frame.speakerId
+      ? this.minDialogueNodeWidth
+      : 0
+    const nextHeight = typeof nodeData.height === "number" ? Math.max(nodeData.height, minHeight) : nodeData.height
+    const nextWidth = typeof nodeData.width === "number" ? Math.max(nodeData.width, minWidth) : nodeData.width
+
+    if (nextHeight === nodeData.height && nextWidth === nodeData.width) {
+      return
+    }
+
+    node.setData({
+      ...nodeData,
+      width: nextWidth,
+      height: nextHeight,
+    })
+    canvas.pushHistory(canvas.getData())
+    this.scheduleRenderCanvas(canvas)
+  }
+
+  // LLM agent change: double-clicking a dialogue frame opens the same settings modal as the toolbar button.
+  private openDialogueFrameFromDoubleClick(
+    canvas: Canvas,
+    event: MouseEvent,
+    preventDefault: { value: boolean }
+  ) {
+    const target = event.target
+
+    if (!(target instanceof HTMLElement)) {
+      return
+    }
+
+    const nodeEl = target.closest(".canvas-node.dialogue-canvas-frame-node") as HTMLElement | null
+
+    if (!nodeEl) {
+      return
+    }
+
+    const node = this.getCanvasNodes(canvas).find(candidate => this.getNodeElement(canvas, candidate) === nodeEl)
+
+    if (!node) {
+      return
+    }
+
+    const nodeData = node.getData() as CanvasNodeDataWithDialogue
+
+    if (!nodeData["x-dialogue"]?.frame) {
+      return
+    }
+
+    preventDefault.value = true
+    void this.openEditFrameModal(canvas, node)
+  }
+
   private applySpeakerMinHeight(
     nodeData: CanvasNodeDataWithDialogue,
     editorValue: DialogueFrameEditorValue
@@ -191,15 +289,18 @@ export default class DialogueFrameCanvasExtension extends CanvasExtension {
       return {}
     }
 
-    const minHeight = hasChoices
-      ? Math.max(this.minSpeakerNodeHeight, this.minChoiceNodeHeight)
-      : this.minSpeakerNodeHeight
+    const minHeight = Math.max(
+      hasSpeaker ? this.minSpeakerNodeHeight : 0,
+      this.getMinimumNodeHeightForChoices(editorValue.choices ?? [])
+    )
+    const minWidth = hasSpeaker || hasChoices ? this.minDialogueNodeWidth : 0
 
-    if (currentHeight >= minHeight) {
+    if (currentHeight >= minHeight && (typeof nodeData.width !== "number" || nodeData.width >= minWidth)) {
       return {}
     }
 
     return {
+      width: typeof nodeData.width === "number" ? Math.max(nodeData.width, minWidth) : nodeData.width,
       height: minHeight,
     }
   }
@@ -309,6 +410,19 @@ export default class DialogueFrameCanvasExtension extends CanvasExtension {
     return [...nodesMap.values()] as CanvasNode[]
   }
 
+  // LLM agent change: embedded choices are part of the frame node, so node height must reserve their rows.
+  private getMinimumNodeHeightForChoices(choices: DialogueChoiceData[]): number {
+    if (choices.length === 0) {
+      return 0
+    }
+
+    const choicesHeight = choices.reduce((total, choice) => {
+      return total + this.choiceRowHeight + (this.choiceHasFailureSlot(choice) ? this.choiceFailureRowHeight : 0)
+    }, 0)
+
+    return this.minFrameContentHeight + this.choicesTopGap + choicesHeight + this.choicesBottomPadding
+  }
+
   // LLM agent change: frame choices are rendered as passive blocks inside the existing canvas node.
   private renderNodeChoices(canvas: Canvas, node: CanvasNode) {
     const nodeData = node.getData() as CanvasNodeDataWithDialogue
@@ -323,13 +437,19 @@ export default class DialogueFrameCanvasExtension extends CanvasExtension {
     if (choices.length === 0) {
       nodeEl.querySelector(":scope > .dialogue-canvas-choice-list")?.remove()
       nodeEl.removeClass("dialogue-canvas-has-choices")
+      nodeEl.style.removeProperty("--dialogue-choice-list-height")
       return
     }
 
     nodeEl.addClass("dialogue-canvas-has-choices")
     nodeEl.addClass("dialogue-canvas-frame-node")
+    nodeEl.style.setProperty("--dialogue-choice-list-height", `${this.getChoiceListHeight(choices)}px`)
 
-    const choiceKey = JSON.stringify(choices)
+    const linkedRoutes = this.getLinkedChoiceRoutes(canvas, node)
+    const choiceKey = JSON.stringify({
+      choices,
+      linkedRoutes: [...linkedRoutes].sort(),
+    })
     const existingList = nodeEl.querySelector(
       ":scope > .dialogue-canvas-choice-list"
     ) as HTMLElement | null
@@ -353,6 +473,12 @@ export default class DialogueFrameCanvasExtension extends CanvasExtension {
 
       const swatchEl = choiceEl.createDiv()
       swatchEl.addClass("dialogue-canvas-choice-swatch")
+      swatchEl.dataset.dialogueChoiceId = choice.choiceId
+      swatchEl.dataset.dialogueChoiceOutcome = "success"
+
+      if (linkedRoutes.has(this.getChoiceRouteKey(choice.choiceId, "success"))) {
+        swatchEl.addClass("dialogue-canvas-choice-route-port")
+      }
 
       const textEl = choiceEl.createDiv()
       textEl.addClass("dialogue-canvas-choice-text")
@@ -373,7 +499,20 @@ export default class DialogueFrameCanvasExtension extends CanvasExtension {
         const failureEl = activeDocument.createElement("div")
         failureEl.addClass("dialogue-canvas-choice-failure")
         failureEl.dataset.dialogueChoiceId = choice.choiceId
-        failureEl.textContent = "fail"
+
+        const failureTextEl = failureEl.createDiv()
+        failureTextEl.addClass("dialogue-canvas-choice-failure-text")
+        failureTextEl.textContent = "fail"
+
+        const failurePortEl = failureEl.createDiv()
+        failurePortEl.addClass("dialogue-canvas-choice-failure-port")
+        failurePortEl.dataset.dialogueChoiceId = choice.choiceId
+        failurePortEl.dataset.dialogueChoiceOutcome = "failure"
+
+        if (linkedRoutes.has(this.getChoiceRouteKey(choice.choiceId, "failure"))) {
+          failurePortEl.addClass("dialogue-canvas-choice-route-port")
+        }
+
         choiceEl.appendChild(failureEl)
       }
 
@@ -400,6 +539,37 @@ export default class DialogueFrameCanvasExtension extends CanvasExtension {
     return `rgb(var(--canvas-color-${colorId}))`
   }
 
+  private getChoiceListHeight(choices: DialogueChoiceData[]): number {
+    return choices.reduce((total, choice, index) => {
+      const gap = index === 0 ? 0 : 4
+      return total + gap + this.choiceRowHeight + (this.choiceHasFailureSlot(choice) ? this.choiceFailureRowHeight : 0)
+    }, 0)
+  }
+
+  private getLinkedChoiceRoutes(canvas: Canvas, node: CanvasNode): Set<string> {
+    const routes = new Set<string>()
+
+    for (const edge of canvas.edges.values()) {
+      const edgeData = edge.getData() as CanvasEdgeDataWithDialogue
+      const route = edgeData["x-dialogue"]?.route
+
+      if (
+        edgeData.fromNode === node.id &&
+        route?.type === "choice" &&
+        route.choiceId &&
+        route.outcome
+      ) {
+        routes.add(this.getChoiceRouteKey(route.choiceId, route.outcome))
+      }
+    }
+
+    return routes
+  }
+
+  private getChoiceRouteKey(choiceId: string, outcome: DialogueChoiceRouteOutcome): string {
+    return `${choiceId}:${outcome}`
+  }
+
   private renderNodeBadge(
     canvas: Canvas,
     node: CanvasNode,
@@ -417,6 +587,7 @@ export default class DialogueFrameCanvasExtension extends CanvasExtension {
 
     if (!speakerId) {
       nodeEl.querySelector(":scope > .dialogue-canvas-character-badge")?.remove()
+      nodeEl.removeClass("dialogue-canvas-has-speaker")
       nodeEl.removeClass("dialogue-canvas-frame-node")
       return
     }
@@ -425,6 +596,7 @@ export default class DialogueFrameCanvasExtension extends CanvasExtension {
 
     if (!character) {
       nodeEl.querySelector(":scope > .dialogue-canvas-character-badge")?.remove()
+      nodeEl.removeClass("dialogue-canvas-has-speaker")
       nodeEl.removeClass("dialogue-canvas-frame-node")
       return
     }
@@ -449,6 +621,7 @@ export default class DialogueFrameCanvasExtension extends CanvasExtension {
     existingBadge?.remove()
 
     nodeEl.addClass("dialogue-canvas-frame-node")
+    nodeEl.addClass("dialogue-canvas-has-speaker")
 
     const badge = activeDocument.createElement("div")
     badge.addClass("dialogue-canvas-character-badge")

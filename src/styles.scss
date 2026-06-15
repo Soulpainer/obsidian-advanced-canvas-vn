@@ -18,19 +18,20 @@
 
 .canvas-node > .dialogue-canvas-character-badge {
   position: absolute;
-  left: -64px;
-  top: 0;
+  left: 10px;
+  top: 10px;
 
-  min-height: 92px;
-  min-width: 74px;
+  right: 10px;
+  min-height: 76px;
 
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
   align-items: center;
+  gap: 8px;
 
   pointer-events: none;
   user-select: none;
-  z-index: -1;
+  z-index: 3;
 
   color: var(--text-normal);
   box-sizing: border-box;
@@ -39,9 +40,9 @@
 .dialogue-canvas-character-portrait {
   width: 64px;
   height: 64px;
+  flex: 0 0 64px;
 
-  border-radius: 0;
-  border-top-left-radius: 14px;
+  border-radius: 6px;
 
   display: flex;
   align-items: center;
@@ -51,9 +52,9 @@
 
   background: var(--background-secondary);
   border: 2px solid var(--dialogue-character-color, var(--interactive-accent));
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.22);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.22);
 
-  font-size: 20px;
+  font-size: 22px;
   font-weight: 700;
 
   box-sizing: border-box;
@@ -66,19 +67,19 @@
 }
 
 .dialogue-canvas-character-name {
-  width: 64px;
+  min-width: 0;
+  flex: 1 1 auto;
 
-  padding: 2px 6px;
+  padding: 6px 8px;
 
-  border-radius: 0;
-  border-bottom-left-radius: 14px;
+  border-radius: 4px;
 
   background: var(--dialogue-character-color, var(--background-secondary));
   color: white;
 
-  font-size: 8px;
+  font-size: 12px;
   font-weight: 700;
-  line-height: 1.2;
+  line-height: 1.25;
   text-align: left;
 
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
@@ -87,6 +88,26 @@
   white-space: normal;
 
   box-sizing: border-box;
+}
+
+// LLM agent change: dialogue frame content fills the card while reserving internal room for speaker and choices.
+.canvas-node.dialogue-canvas-frame-node > .canvas-node-container,
+.canvas-node.dialogue-canvas-frame-node > .canvas-node-container > .canvas-node-content,
+.canvas-node.dialogue-canvas-frame-node .markdown-preview-view,
+.canvas-node.dialogue-canvas-frame-node .markdown-source-view,
+.canvas-node.dialogue-canvas-frame-node .cm-editor {
+  height: 100%;
+  box-sizing: border-box;
+}
+
+.canvas-node.dialogue-canvas-frame-node .markdown-preview-view,
+.canvas-node.dialogue-canvas-frame-node .markdown-source-view {
+  padding: 12px 12px calc(var(--dialogue-choice-list-height, 0px) + 24px) 12px;
+}
+
+.canvas-node.dialogue-canvas-frame-node.dialogue-canvas-has-speaker .markdown-preview-view,
+.canvas-node.dialogue-canvas-frame-node.dialogue-canvas-has-speaker .markdown-source-view {
+  padding-top: 92px;
 }
 
 .dialogue-canvas-modal-textarea-container {
@@ -144,8 +165,8 @@
 
 .canvas-node > .dialogue-canvas-choice-list {
   position: absolute;
-  left: 10px;
-  right: 10px;
+  left: 0;
+  right: 0;
   bottom: 8px;
 
   display: flex;
@@ -159,9 +180,10 @@
 
 .dialogue-canvas-choice-row {
   pointer-events: none;
+  position: relative;
 
   min-height: 22px;
-  padding: 3px 6px;
+  padding: 4px 18px 4px 10px;
 
   display: grid;
   grid-template-columns: 8px minmax(0, 1fr) auto;
@@ -182,13 +204,30 @@
   background: var(--dialogue-choice-success-color, var(--interactive-accent));
 }
 
+.dialogue-canvas-choice-route-port {
+  position: absolute;
+  right: -7px;
+  top: 50%;
+
+  width: 14px;
+  height: 14px;
+
+  border-radius: 50%;
+  border: 2px solid var(--background-primary);
+  background: var(--dialogue-choice-success-color, var(--interactive-accent));
+  transform: translateY(-50%);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.25);
+}
+
 .dialogue-canvas-choice-text {
+  grid-column: 2;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .dialogue-canvas-choice-meta {
+  grid-column: 3;
   display: flex;
   gap: 4px;
 
@@ -199,17 +238,42 @@
 
 .dialogue-canvas-choice-failure {
   pointer-events: none;
+  position: relative;
 
   grid-column: 1 / 4;
 
   margin-top: 3px;
-  padding: 3px 0 2px 14px;
+  margin-right: -18px;
+  padding: 4px 18px 4px 14px;
+
+  display: flex;
+  align-items: center;
+  min-height: 20px;
 
   border-left: 2px dashed var(--dialogue-choice-failure-color, var(--text-error));
+  background: color-mix(in srgb, var(--dialogue-choice-failure-color, var(--text-error)) 10%, transparent);
 
   color: var(--text-muted);
   font-size: 10px;
   line-height: 1.2;
+}
+
+.dialogue-canvas-choice-failure-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.dialogue-canvas-choice-failure-port {
+  display: none;
+}
+
+.dialogue-canvas-choice-failure-port.dialogue-canvas-choice-route-port {
+  display: block;
+  right: -7px;
+  background: var(--dialogue-choice-failure-color, var(--text-error));
 }
 
 // LLM agent change: choice-bound canvas edges are identified by color/anchor, so labels stay hidden.

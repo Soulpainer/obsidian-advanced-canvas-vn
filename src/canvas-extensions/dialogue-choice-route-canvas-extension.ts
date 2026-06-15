@@ -130,6 +130,12 @@ class EditDialogueChoiceRouteModal extends Modal {
 }
 
 export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension {
+  private readonly minFrameContentHeight = 120
+  private readonly choicesTopGap = 12
+  private readonly choiceRowHeight = 30
+  private readonly choiceFailureRowHeight = 24
+  private readonly choicesBottomPadding = 12
+
   // LLM agent change: route edges bind to numbered choices stored inside frame nodes.
   isEnabled() {
     return true
@@ -146,6 +152,10 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
     this.plugin.registerEvent(this.plugin.app.workspace.on("advanced-canvas:node-changed", rerender))
     this.plugin.registerEvent(this.plugin.app.workspace.on("advanced-canvas:node-moved", rerender))
     this.plugin.registerEvent(this.plugin.app.workspace.on("advanced-canvas:node-resized", rerender))
+    this.plugin.registerEvent(this.plugin.app.workspace.on(
+      "advanced-canvas:edge-connection-dragging:before",
+      (canvas: Canvas) => this.renderWhilePointerMoves(canvas)
+    ))
     this.plugin.registerEvent(this.plugin.app.workspace.on("layout-change", () => this.scheduleRenderAllCanvases()))
     this.plugin.registerEvent(this.plugin.app.workspace.on("active-leaf-change", () => this.scheduleRenderAllCanvases()))
 
@@ -342,7 +352,7 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
     node.setData({
       ...nodeData,
       text: value.text,
-      height: Math.max(nodeData.height ?? 0, (value.choices?.length ?? 0) > 0 ? 220 : 160),
+      height: Math.max(nodeData.height ?? 0, this.getMinimumNodeHeightForChoices(value.choices ?? []), 160),
       "x-dialogue": {
         ...nodeData["x-dialogue"],
         frame: {
@@ -368,6 +378,33 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
 
   private scheduleRenderCanvas(canvas: Canvas) {
     window.setTimeout(() => this.renderCanvas(canvas), 120)
+  }
+
+  // LLM agent change: route anchors follow the pointer while a canvas edge connection is being dragged.
+  private renderWhilePointerMoves(canvas: Canvas) {
+    let animationFrameId: number | null = null
+    const render = () => {
+      if (animationFrameId !== null) {
+        return
+      }
+
+      animationFrameId = window.requestAnimationFrame(() => {
+        animationFrameId = null
+        this.renderCanvas(canvas)
+      })
+    }
+    const stop = () => {
+      activeDocument.removeEventListener("pointermove", render)
+
+      if (animationFrameId !== null) {
+        window.cancelAnimationFrame(animationFrameId)
+      }
+
+      this.renderCanvas(canvas)
+    }
+
+    activeDocument.addEventListener("pointermove", render)
+    activeDocument.addEventListener("pointerup", stop, { once: true })
   }
 
   private renderCanvas(canvas: Canvas) {
@@ -432,19 +469,21 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
     outcome: DialogueChoiceRouteOutcome
   ): Position {
     const nodeEl = this.getNodeElement(sourceNode)
-    const selector = outcome === "failure"
+    const portSelector = `.dialogue-canvas-choice-route-port[data-dialogue-choice-id="${this.escapeCss(choiceId)}"][data-dialogue-choice-outcome="${outcome}"]`
+    const rowSelector = outcome === "failure"
       ? `.dialogue-canvas-choice-failure[data-dialogue-choice-id="${this.escapeCss(choiceId)}"]`
       : `.dialogue-canvas-choice-row[data-dialogue-choice-id="${this.escapeCss(choiceId)}"]`
-    const anchorEl = nodeEl?.querySelector(selector) as HTMLElement | null
+    const portEl = nodeEl?.querySelector(portSelector) as HTMLElement | null
+    const anchorEl = nodeEl?.querySelector(rowSelector) as HTMLElement | null
     const fallbackEl = nodeEl?.querySelector(
       `.dialogue-canvas-choice-row[data-dialogue-choice-id="${this.escapeCss(choiceId)}"]`
     ) as HTMLElement | null
-    const targetEl = anchorEl ?? fallbackEl
+    const targetEl = portEl ?? anchorEl ?? fallbackEl
 
     if (targetEl) {
       const rect = targetEl.getBoundingClientRect()
       return canvas.posFromClient({
-        x: rect.right,
+        x: portEl ? rect.left + rect.width / 2 : rect.right,
         y: rect.top + rect.height / 2,
       })
     }
@@ -486,6 +525,25 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
   private getRouteColorId(choiceIndex: number, outcome: DialogueChoiceRouteOutcome): string {
     const base = choiceIndex * 2
     return String((outcome === "success" ? base : base + 1) % 6 + 1)
+  }
+
+  private getMinimumNodeHeightForChoices(choices: DialogueChoiceData[]): number {
+    if (choices.length === 0) {
+      return 0
+    }
+
+    const choicesHeight = choices.reduce((total, choice) => {
+      return total + this.choiceRowHeight + (this.choiceHasFailureSlot(choice) ? this.choiceFailureRowHeight : 0)
+    }, 0)
+
+    return this.minFrameContentHeight + this.choicesTopGap + choicesHeight + this.choicesBottomPadding
+  }
+
+  private choiceHasFailureSlot(choice: DialogueChoiceData): boolean {
+    return (
+      (choice.checks?.items?.length ?? 0) > 0 ||
+      (choice.conditions?.items?.length ?? 0) > 0
+    )
   }
 
   private getChoiceRoute(route: DialogueFailureRouteData | undefined): DialogueChoiceRouteData | undefined {
