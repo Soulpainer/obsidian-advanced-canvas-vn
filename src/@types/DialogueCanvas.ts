@@ -67,6 +67,15 @@ export interface DialogueAnswerConditionsData {
   items: DialogueAnswerConditionItem[]
 }
 
+// LLM agent change: choices belong to a dialogue frame node, not to canvas edges.
+export interface DialogueChoiceData {
+  choiceId: string
+  text: string
+  hideWhenUnavailable?: boolean
+  checks?: DialogueAnswerChecksData
+  conditions?: DialogueAnswerConditionsData
+}
+
 export interface DialogueEdgeData {
   answer?: DialogueAnswerData
   route?: DialogueFailureRouteData
@@ -75,6 +84,7 @@ export interface DialogueEdgeData {
 export interface DialogueFrameData {
   frameId: string
   speakerId?: string
+  choices?: DialogueChoiceData[]
 }
 
 export interface DialogueFrameEditorValue extends DialogueFrameData {

@@ -2,12 +2,15 @@ import { Notice, TFile } from "obsidian"
 import { Canvas, CanvasElement, CanvasNode } from "src/@types/Canvas"
 import {
   DialogueCharacterDefinition,
+  DialogueChoiceData,
   DialogueFrameEditorValue,
   DialogueNodeData,
 } from "src/@types/DialogueCanvas"
 import CanvasHelper from "src/utils/canvas-helper"
 import CanvasExtension from "./canvas-extension"
 import DialogueCharactersLoader from "src/utils/dialogue-characters-loader"
+import DialoguePropertiesLoader from "src/utils/dialogue-properties-loader"
+import DialogueStatsLoader from "src/utils/dialogue-stats-loader"
 import EditDialogueFrameModal from "src/modals/edit-dialogue-frame-modal"
 
 type CanvasNodeDataWithDialogue = ReturnType<CanvasNode["getData"]> & {
@@ -25,6 +28,7 @@ export default class DialogueFrameCanvasExtension extends CanvasExtension {
   // Минимальная высота карточки, если у неё есть speaker.
   // Подгони под свой шаг сетки.
   private readonly minSpeakerNodeHeight = 160
+  private readonly minChoiceNodeHeight = 220
 
   private readonly observedCanvasWrappers = new WeakSet<HTMLElement>()
 
@@ -103,7 +107,11 @@ export default class DialogueFrameCanvasExtension extends CanvasExtension {
   private async openEditFrameModal(canvas: Canvas, node: CanvasNode) {
     const nodeData = node.getData() as CanvasNodeDataWithDialogue
     const frameMeta = nodeData["x-dialogue"]?.frame
-    const characters = await DialogueCharactersLoader.loadCharacters(this.plugin.app as any)
+    const [characters, stats, properties] = await Promise.all([
+      DialogueCharactersLoader.loadCharacters(this.plugin.app as any),
+      DialogueStatsLoader.loadStats(this.plugin.app as any),
+      DialoguePropertiesLoader.loadProperties(this.plugin.app as any),
+    ])
 
     const initialValue: DialogueFrameEditorValue = {
       frameId:
@@ -117,11 +125,16 @@ export default class DialogueFrameCanvasExtension extends CanvasExtension {
       // x-dialogue.frame.text больше не читаем.
       text:
         nodeData.text ?? "",
+
+      choices:
+        frameMeta?.choices?.map(choice => ({ ...choice })),
     }
 
     new EditDialogueFrameModal(this.plugin.app as any, {
       initialValue,
       characters,
+      stats,
+      properties,
       onSubmit: value => {
         this.saveDialogueFrame(canvas, node, value)
       },
@@ -135,6 +148,7 @@ export default class DialogueFrameCanvasExtension extends CanvasExtension {
   ) {
     const nodeData = node.getData() as CanvasNodeDataWithDialogue
     const adjustedData = this.applySpeakerMinHeight(nodeData, editorValue)
+    const existingFrame = nodeData["x-dialogue"]?.frame
 
     const nextData: CanvasNodeDataWithDialogue = {
       ...nodeData,
@@ -149,6 +163,9 @@ export default class DialogueFrameCanvasExtension extends CanvasExtension {
         frame: {
           frameId: editorValue.frameId,
           speakerId: editorValue.speakerId,
+          choices: editorValue.choices ?? [],
+          checks: existingFrame?.checks,
+          conditions: existingFrame?.conditions,
         },
       },
     }
@@ -167,18 +184,23 @@ export default class DialogueFrameCanvasExtension extends CanvasExtension {
     editorValue: DialogueFrameEditorValue
   ): Partial<CanvasNodeDataWithDialogue> {
     const hasSpeaker = Boolean(editorValue.speakerId)
+    const hasChoices = (editorValue.choices?.length ?? 0) > 0
     const currentHeight = nodeData.height
 
-    if (!hasSpeaker || typeof currentHeight !== "number") {
+    if ((!hasSpeaker && !hasChoices) || typeof currentHeight !== "number") {
       return {}
     }
 
-    if (currentHeight >= this.minSpeakerNodeHeight) {
+    const minHeight = hasChoices
+      ? Math.max(this.minSpeakerNodeHeight, this.minChoiceNodeHeight)
+      : this.minSpeakerNodeHeight
+
+    if (currentHeight >= minHeight) {
       return {}
     }
 
     return {
-      height: this.minSpeakerNodeHeight,
+      height: minHeight,
     }
   }
 
@@ -225,6 +247,7 @@ export default class DialogueFrameCanvasExtension extends CanvasExtension {
 
     for (const node of nodes) {
       this.renderNodeBadge(canvas, node, characters)
+      this.renderNodeChoices(canvas, node)
     }
   }
 
@@ -246,7 +269,10 @@ export default class DialogueFrameCanvasExtension extends CanvasExtension {
         }
 
         // Игнорируем собственные изменения бейджа, чтобы не гонять цикл.
-        if (target.closest(".dialogue-canvas-character-badge")) {
+        if (
+          target.closest(".dialogue-canvas-character-badge") ||
+          target.closest(".dialogue-canvas-choice-list")
+        ) {
           return false
         }
 
@@ -281,6 +307,91 @@ export default class DialogueFrameCanvasExtension extends CanvasExtension {
     }
 
     return [...nodesMap.values()] as CanvasNode[]
+  }
+
+  // LLM agent change: frame choices are rendered as passive blocks inside the existing canvas node.
+  private renderNodeChoices(canvas: Canvas, node: CanvasNode) {
+    const nodeData = node.getData() as CanvasNodeDataWithDialogue
+    const nodeEl = this.getNodeElement(canvas, node)
+
+    if (!nodeEl) {
+      return
+    }
+
+    const choices = nodeData["x-dialogue"]?.frame?.choices ?? []
+
+    if (choices.length === 0) {
+      nodeEl.querySelector(":scope > .dialogue-canvas-choice-list")?.remove()
+      nodeEl.removeClass("dialogue-canvas-has-choices")
+      return
+    }
+
+    nodeEl.addClass("dialogue-canvas-has-choices")
+    nodeEl.addClass("dialogue-canvas-frame-node")
+
+    const choiceKey = JSON.stringify(choices)
+    const existingList = nodeEl.querySelector(
+      ":scope > .dialogue-canvas-choice-list"
+    ) as HTMLElement | null
+
+    if (existingList?.dataset.dialogueChoiceKey === choiceKey) {
+      return
+    }
+
+    existingList?.remove()
+
+    const listEl = activeDocument.createElement("div")
+    listEl.addClass("dialogue-canvas-choice-list")
+    listEl.dataset.dialogueChoiceKey = choiceKey
+
+    choices.forEach((choice, index) => {
+      const choiceEl = activeDocument.createElement("div")
+      choiceEl.addClass("dialogue-canvas-choice-row")
+      choiceEl.dataset.dialogueChoiceId = choice.choiceId
+      choiceEl.style.setProperty("--dialogue-choice-color", this.getChoiceColor(index))
+
+      const swatchEl = choiceEl.createDiv()
+      swatchEl.addClass("dialogue-canvas-choice-swatch")
+
+      const textEl = choiceEl.createDiv()
+      textEl.addClass("dialogue-canvas-choice-text")
+      textEl.textContent = choice.text
+
+      const metaEl = choiceEl.createDiv()
+      metaEl.addClass("dialogue-canvas-choice-meta")
+
+      if ((choice.checks?.items?.length ?? 0) > 0) {
+        metaEl.createSpan({ text: "check" })
+      }
+
+      if ((choice.conditions?.items?.length ?? 0) > 0) {
+        metaEl.createSpan({ text: "cond" })
+      }
+
+      if (this.choiceHasFailureSlot(choice)) {
+        const failureEl = activeDocument.createElement("div")
+        failureEl.addClass("dialogue-canvas-choice-failure")
+        failureEl.dataset.dialogueChoiceId = choice.choiceId
+        failureEl.textContent = "fail"
+        choiceEl.appendChild(failureEl)
+      }
+
+      listEl.appendChild(choiceEl)
+    })
+
+    nodeEl.appendChild(listEl)
+  }
+
+  private choiceHasFailureSlot(choice: DialogueChoiceData): boolean {
+    return (
+      (choice.checks?.items?.length ?? 0) > 0 ||
+      (choice.conditions?.items?.length ?? 0) > 0
+    )
+  }
+
+  private getChoiceColor(index: number): string {
+    const colorId = (index % 6) + 1
+    return `rgb(var(--canvas-color-${colorId}))`
   }
 
   private renderNodeBadge(

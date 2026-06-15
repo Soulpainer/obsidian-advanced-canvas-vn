@@ -1,18 +1,27 @@
 import { ButtonComponent, Modal, Notice, Setting } from "obsidian"
 import {
   DialogueCharacterDefinition,
+  DialogueChoiceData,
   DialogueFrameEditorValue,
+  DialoguePropertyDefinition,
+  DialogueStatDefinition,
 } from "src/@types/DialogueCanvas"
+import EditDialogueChecksModal from "./edit-dialogue-checks-modal"
+import EditDialogueConditionsModal from "./edit-dialogue-conditions-modal"
 
 export interface EditDialogueFrameModalOptions {
   initialValue: DialogueFrameEditorValue
   characters: DialogueCharacterDefinition[]
+  stats: DialogueStatDefinition[]
+  properties: DialoguePropertyDefinition[]
   onSubmit: (value: DialogueFrameEditorValue) => void
 }
 
 export default class EditDialogueFrameModal extends Modal {
   private value: DialogueFrameEditorValue
   private readonly characters: DialogueCharacterDefinition[]
+  private readonly stats: DialogueStatDefinition[]
+  private readonly properties: DialoguePropertyDefinition[]
   private readonly onSubmitCallback: (value: DialogueFrameEditorValue) => void
 
   constructor(app: any, options: EditDialogueFrameModalOptions) {
@@ -22,13 +31,20 @@ export default class EditDialogueFrameModal extends Modal {
       frameId: options.initialValue.frameId ?? "",
       speakerId: options.initialValue.speakerId,
       text: options.initialValue.text ?? "",
+      choices: options.initialValue.choices?.map(choice => ({ ...choice })) ?? [],
     }
 
     this.characters = options.characters
+    this.stats = options.stats
+    this.properties = options.properties
     this.onSubmitCallback = options.onSubmit
   }
 
   onOpen() {
+    this.render()
+  }
+
+  private render() {
     const { contentEl } = this
 
     contentEl.empty()
@@ -79,6 +95,8 @@ export default class EditDialogueFrameModal extends Modal {
       this.value.text = textarea.value
     })
 
+    this.renderChoicesSection(contentEl)
+
     new Setting(contentEl)
       .addButton((button: ButtonComponent) => {
         button
@@ -101,6 +119,7 @@ export default class EditDialogueFrameModal extends Modal {
               frameId: this.value.frameId,
               speakerId: this.value.speakerId || undefined,
               text: this.value.text ?? "",
+              choices: this.getValidChoices(),
             })
 
             this.close()
@@ -110,5 +129,191 @@ export default class EditDialogueFrameModal extends Modal {
 
   onClose() {
     this.contentEl.empty()
+  }
+
+  // LLM agent change: choices are edited in the frame modal because they belong to the frame node.
+  private renderChoicesSection(contentEl: HTMLElement) {
+    contentEl.createEl("h3", { text: "Choices" })
+
+    const choices = this.value.choices ?? []
+
+    if (choices.length === 0) {
+      contentEl.createEl("p", {
+        text: "No choices yet.",
+      })
+    }
+
+    choices.forEach((choice, index) => {
+      const container = contentEl.createDiv()
+      container.addClass("dialogue-canvas-choice-editor-row")
+      container.style.setProperty("--dialogue-choice-color", this.getChoiceColor(index))
+
+      new Setting(container)
+        .setName(`Choice ${index + 1}`)
+        .setDesc(this.getChoiceSettingsDescription(choice, index))
+        .addButton(button => {
+          button
+            .setButtonText("Checks")
+            .onClick(() => {
+              this.openChoiceChecksModal(choice)
+            })
+        })
+        .addButton(button => {
+          button
+            .setButtonText("Conditions")
+            .onClick(() => {
+              this.openChoiceConditionsModal(choice)
+            })
+        })
+        .addButton(button => {
+          button
+            .setButtonText("Remove")
+            .onClick(() => {
+              choices.splice(index, 1)
+              this.render()
+            })
+        })
+
+      const textContainer = container.createDiv()
+      textContainer.addClass("dialogue-canvas-choice-textarea-container")
+
+      textContainer.createEl("label", {
+        text: "Choice text",
+        cls: "dialogue-canvas-modal-label",
+      })
+
+      const textarea = textContainer.createEl("textarea")
+      textarea.addClass("dialogue-canvas-choice-textarea")
+      textarea.placeholder = "Ask about the ship"
+      textarea.value = choice.text
+      textarea.addEventListener("input", () => {
+        choice.text = textarea.value
+      })
+
+      new Setting(container)
+        .setName("Hide when unavailable")
+        .setDesc("Kept with this choice for later checks and conditions.")
+        .addToggle(toggle => {
+          toggle
+            .setValue(choice.hideWhenUnavailable ?? true)
+            .onChange(value => {
+              choice.hideWhenUnavailable = value
+            })
+        })
+
+      if (this.choiceHasFailureSlot(choice)) {
+        const failureEl = container.createDiv()
+        failureEl.addClass("dialogue-canvas-choice-editor-failure")
+        failureEl.textContent = "Failure slot"
+      }
+    })
+
+    new Setting(contentEl)
+      .addButton(button => {
+        button
+          .setButtonText("Add Choice")
+          .onClick(() => {
+            choices.push(this.createChoice())
+            this.value.choices = choices
+            this.render()
+          })
+      })
+  }
+
+  private createChoice(): DialogueChoiceData {
+    return {
+      choiceId: String((this.value.choices ?? []).length + 1),
+      text: "Choice",
+      hideWhenUnavailable: true,
+    }
+  }
+
+  private getValidChoices(): DialogueChoiceData[] {
+    const result: DialogueChoiceData[] = []
+
+    for (const choice of this.value.choices ?? []) {
+      const text = choice.text.trim()
+
+      if (!text) {
+        continue
+      }
+
+      result.push({
+        ...choice,
+        choiceId: String(result.length + 1),
+        text,
+        hideWhenUnavailable: choice.hideWhenUnavailable ?? true,
+      })
+    }
+
+    return result
+  }
+
+  private openChoiceChecksModal(choice: DialogueChoiceData) {
+    new EditDialogueChecksModal(this.app as any, {
+      stats: this.stats,
+      initialValue: choice.checks,
+      onSubmit: value => {
+        choice.checks = value
+        this.render()
+      },
+    }).open()
+  }
+
+  private openChoiceConditionsModal(choice: DialogueChoiceData) {
+    new EditDialogueConditionsModal(this.app as any, {
+      stats: this.stats,
+      properties: this.properties,
+      initialValue: choice.conditions,
+      onSubmit: value => {
+        choice.conditions = value
+        this.render()
+      },
+    }).open()
+  }
+
+  private getChoiceSettingsDescription(choice: DialogueChoiceData, index: number): string {
+    const checksCount = choice.checks?.items?.length ?? 0
+    const conditionsCount = choice.conditions?.items?.length ?? 0
+
+    return `Internal route ID: ${index + 1}. Checks: ${checksCount}. Conditions: ${conditionsCount}.`
+  }
+
+  private choiceHasFailureSlot(choice: DialogueChoiceData): boolean {
+    return (
+      (choice.checks?.items?.length ?? 0) > 0 ||
+      (choice.conditions?.items?.length ?? 0) > 0
+    )
+  }
+
+  private getChoiceColor(index: number): string {
+    const colorId = (index % 6) + 1
+    return `rgb(var(--canvas-color-${colorId}))`
+  }
+
+  private generateChoiceId(label: string): string {
+    const normalized = label
+      .toLowerCase()
+      .trim()
+      .replace(/<[^>]*>/g, "")
+      .replace(/[^a-zа-яё0-9]+/gi, "_")
+      .replace(/^_+|_+$/g, "")
+
+    return normalized || "choice"
+  }
+
+  private generateStableChoiceId(): string {
+    const choices = this.value.choices ?? []
+    const existingIds = new Set(choices.map(choice => choice.choiceId))
+
+    let index = choices.length + 1
+    let choiceId = this.generateChoiceId(`choice_${index}`)
+
+    while (existingIds.has(choiceId)) {
+      index += 1
+      choiceId = this.generateChoiceId(`choice_${index}`)
+    }
+
+    return choiceId
   }
 }
