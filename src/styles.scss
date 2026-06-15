@@ -110,7 +110,7 @@
   padding: 10px 12px;
 
   border: 1px solid var(--background-modifier-border);
-  border-left: 4px solid var(--dialogue-choice-color, var(--interactive-accent));
+  border-left: 4px solid var(--dialogue-choice-success-color, var(--interactive-accent));
   background: var(--background-secondary);
 }
 
@@ -128,7 +128,7 @@
   margin: 8px 0 2px;
   padding: 6px 8px;
 
-  border-left: 2px dashed var(--dialogue-choice-color, var(--interactive-accent));
+  border-left: 2px dashed var(--dialogue-choice-failure-color, var(--text-error));
   background: var(--background-primary);
 
   color: var(--text-muted);
@@ -168,8 +168,8 @@
   gap: 6px;
   align-items: center;
 
-  border-left: 3px solid var(--dialogue-choice-color, var(--interactive-accent));
-  background: color-mix(in srgb, var(--dialogue-choice-color, var(--interactive-accent)) 14%, var(--background-secondary));
+  border-left: 3px solid var(--dialogue-choice-success-color, var(--interactive-accent));
+  background: color-mix(in srgb, var(--dialogue-choice-success-color, var(--interactive-accent)) 14%, var(--background-secondary));
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
 
   font-size: 11px;
@@ -179,7 +179,7 @@
 .dialogue-canvas-choice-swatch {
   width: 8px;
   height: 8px;
-  background: var(--dialogue-choice-color, var(--interactive-accent));
+  background: var(--dialogue-choice-success-color, var(--interactive-accent));
 }
 
 .dialogue-canvas-choice-text {
@@ -205,9 +205,14 @@
   margin-top: 3px;
   padding: 3px 0 2px 14px;
 
-  border-left: 2px dashed var(--dialogue-choice-color, var(--interactive-accent));
+  border-left: 2px dashed var(--dialogue-choice-failure-color, var(--text-error));
 
   color: var(--text-muted);
   font-size: 10px;
   line-height: 1.2;
+}
+
+// LLM agent change: choice-bound canvas edges are identified by color/anchor, so labels stay hidden.
+.dialogue-canvas-hidden-edge-label {
+  display: none;
 }

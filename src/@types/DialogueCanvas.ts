@@ -106,11 +106,14 @@ export interface DialogueAnswerEditorValue extends DialogueAnswerData {
   text: string
 }
 
-export type DialogueRouteType = "failure"
+export type DialogueRouteType = "failure" | "choice"
+export type DialogueChoiceRouteOutcome = "success" | "failure"
 
 export interface DialogueFailureRouteData {
   type: DialogueRouteType
-  answerId: string
+  answerId?: string
+  choiceId?: string
+  outcome?: DialogueChoiceRouteOutcome
   statId?: string
 }
 

@@ -48,6 +48,7 @@ import FloatingEdgeCanvasExtension from './canvas-extensions/floating-edge-canva
 import EdgeHighlightCanvasExtension from './canvas-extensions/edge-highlight-canvas-extension'
 import CopyNodeReferenceCanvasExtension from './canvas-extensions/copy-node-reference-canvas-extension'
 import DialogueAnswerCanvasExtension from './canvas-extensions/dialogue-answer-canvas-extension'
+import DialogueChoiceRouteCanvasExtension from './canvas-extensions/dialogue-choice-route-canvas-extension'
 import DialogueFrameCanvasExtension from './canvas-extensions/dialogue-frame-canvas-extension'
 
 // Advanced Styles
@@ -112,6 +113,7 @@ const CANVAS_EXTENSIONS: typeof CanvasExtension[] = [
   EdgeHighlightCanvasExtension,
   AutoFileNodeEdgesCanvasExtension,
   DialogueFrameCanvasExtension,
+  DialogueChoiceRouteCanvasExtension,
   DialogueAnswerCanvasExtension,
   FlipEdgeCanvasExtension,
   ZOrderingCanvasExtension,

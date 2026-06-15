@@ -348,7 +348,8 @@ export default class DialogueFrameCanvasExtension extends CanvasExtension {
       const choiceEl = activeDocument.createElement("div")
       choiceEl.addClass("dialogue-canvas-choice-row")
       choiceEl.dataset.dialogueChoiceId = choice.choiceId
-      choiceEl.style.setProperty("--dialogue-choice-color", this.getChoiceColor(index))
+      choiceEl.style.setProperty("--dialogue-choice-success-color", this.getChoiceSuccessColor(index))
+      choiceEl.style.setProperty("--dialogue-choice-failure-color", this.getChoiceFailureColor(index))
 
       const swatchEl = choiceEl.createDiv()
       swatchEl.addClass("dialogue-canvas-choice-swatch")
@@ -389,8 +390,13 @@ export default class DialogueFrameCanvasExtension extends CanvasExtension {
     )
   }
 
-  private getChoiceColor(index: number): string {
-    const colorId = (index % 6) + 1
+  private getChoiceSuccessColor(index: number): string {
+    const colorId = (index * 2) % 6 + 1
+    return `rgb(var(--canvas-color-${colorId}))`
+  }
+
+  private getChoiceFailureColor(index: number): string {
+    const colorId = (index * 2 + 1) % 6 + 1
     return `rgb(var(--canvas-color-${colorId}))`
   }
 

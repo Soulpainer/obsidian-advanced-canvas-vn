@@ -146,7 +146,8 @@ export default class EditDialogueFrameModal extends Modal {
     choices.forEach((choice, index) => {
       const container = contentEl.createDiv()
       container.addClass("dialogue-canvas-choice-editor-row")
-      container.style.setProperty("--dialogue-choice-color", this.getChoiceColor(index))
+      container.style.setProperty("--dialogue-choice-success-color", this.getChoiceSuccessColor(index))
+      container.style.setProperty("--dialogue-choice-failure-color", this.getChoiceFailureColor(index))
 
       new Setting(container)
         .setName(`Choice ${index + 1}`)
@@ -286,8 +287,13 @@ export default class EditDialogueFrameModal extends Modal {
     )
   }
 
-  private getChoiceColor(index: number): string {
-    const colorId = (index % 6) + 1
+  private getChoiceSuccessColor(index: number): string {
+    const colorId = (index * 2) % 6 + 1
+    return `rgb(var(--canvas-color-${colorId}))`
+  }
+
+  private getChoiceFailureColor(index: number): string {
+    const colorId = (index * 2 + 1) % 6 + 1
     return `rgb(var(--canvas-color-${colorId}))`
   }
 
