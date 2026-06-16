@@ -14,6 +14,7 @@ import CanvasExtension from "./canvas-extension"
 import DialogueCharactersLoader from "src/utils/dialogue-characters-loader"
 import DialoguePropertiesLoader from "src/utils/dialogue-properties-loader"
 import DialogueStatsLoader from "src/utils/dialogue-stats-loader"
+import DialogueTriggersLoader from "src/utils/dialogue-triggers-loader"
 import EditDialogueFrameModal, { DialogueFrameFocusTarget } from "src/modals/edit-dialogue-frame-modal"
 
 type CanvasNodeDataWithDialogue = ReturnType<CanvasNode["getData"]> & {
@@ -165,10 +166,11 @@ export default class DialogueFrameCanvasExtension extends CanvasExtension {
     this.editModalOpenNodes.add(node)
     const nodeData = node.getData() as CanvasNodeDataWithDialogue
     const frameMeta = nodeData["x-dialogue"]?.frame
-    const [characters, stats, properties] = await Promise.all([
+    const [characters, stats, properties, triggers] = await Promise.all([
       DialogueCharactersLoader.loadCharacters(this.plugin.app as any),
       DialogueStatsLoader.loadStats(this.plugin.app as any),
       DialoguePropertiesLoader.loadProperties(this.plugin.app as any),
+      DialogueTriggersLoader.loadTriggers(this.plugin.app as any),
     ])
 
     const initialValue: DialogueFrameEditorValue = {
@@ -186,6 +188,8 @@ export default class DialogueFrameCanvasExtension extends CanvasExtension {
 
       choices:
         frameMeta?.choices?.map(choice => ({ ...choice })),
+      actions:
+        frameMeta?.actions?.map(action => ({ ...action })),
     }
 
     new EditDialogueFrameModal(this.plugin.app as any, {
@@ -193,6 +197,7 @@ export default class DialogueFrameCanvasExtension extends CanvasExtension {
       characters,
       stats,
       properties,
+      triggers,
       focusTarget,
       onSubmit: value => {
         this.saveDialogueFrame(canvas, node, value)
@@ -238,6 +243,7 @@ export default class DialogueFrameCanvasExtension extends CanvasExtension {
           frameId: editorValue.frameId,
           speakerId: editorValue.speakerId,
           choices: editorValue.choices ?? [],
+          actions: editorValue.actions ?? [],
           checks: existingFrame?.checks,
           conditions: existingFrame?.conditions,
         },

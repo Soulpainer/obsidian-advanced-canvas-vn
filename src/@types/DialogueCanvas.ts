@@ -17,6 +17,12 @@ export interface DialoguePropertyDefinition {
   description?: string
 }
 
+export interface DialogueTriggerDefinition {
+  id: string
+  name: string
+  description?: string
+}
+
 export type DialogueStatValueMap = Record<string, number>
 
 export interface DialogueInventoryItem {
@@ -93,6 +99,54 @@ export interface DialogueChoiceData {
   conditions?: DialogueAnswerConditionsData
 }
 
+export type DialogueFrameActionOperation = "add" | "subtract" | "set"
+export type DialogueFrameActionType = "trigger" | "globalProperty" | "characterStat" | "characterInventory"
+export type DialogueFrameActionNumberType = "integer" | "float"
+
+export interface DialogueFrameActionRangeValue {
+  mode: "range"
+  min: number
+  max: number
+  numberType: DialogueFrameActionNumberType
+}
+
+export type DialogueFrameActionValue = DialogueConditionValue | DialogueFrameActionRangeValue
+export type DialogueFrameActionNumericValue = number | DialogueFrameActionRangeValue
+
+export interface DialogueFrameTriggerActionData {
+  type: "trigger"
+  triggerId: string
+}
+
+export interface DialogueFrameGlobalPropertyActionData {
+  type: "globalProperty"
+  propertyId: string
+  operation: DialogueFrameActionOperation
+  value: DialogueFrameActionValue
+}
+
+export interface DialogueFrameCharacterStatActionData {
+  type: "characterStat"
+  characterId: string
+  statId: string
+  operation: DialogueFrameActionOperation
+  value: DialogueFrameActionNumericValue
+}
+
+export interface DialogueFrameCharacterInventoryActionData {
+  type: "characterInventory"
+  characterId: string
+  itemId: string
+  operation: DialogueFrameActionOperation
+  quantity: DialogueFrameActionNumericValue
+}
+
+export type DialogueFrameActionData =
+  | DialogueFrameTriggerActionData
+  | DialogueFrameGlobalPropertyActionData
+  | DialogueFrameCharacterStatActionData
+  | DialogueFrameCharacterInventoryActionData
+
 export interface DialogueEdgeData {
   answer?: DialogueAnswerData
   route?: DialogueFailureRouteData
@@ -102,6 +156,7 @@ export interface DialogueFrameData {
   frameId: string
   speakerId?: string
   choices?: DialogueChoiceData[]
+  actions?: DialogueFrameActionData[]
 }
 
 export interface DialogueFrameEditorValue extends DialogueFrameData {

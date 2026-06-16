@@ -2,9 +2,15 @@ import { ButtonComponent, Modal, Notice, Setting } from "obsidian"
 import {
   DialogueCharacterDefinition,
   DialogueChoiceData,
+  DialogueFrameActionData,
+  DialogueFrameActionNumericValue,
+  DialogueFrameActionOperation,
+  DialogueFrameActionType,
+  DialogueFrameActionValue,
   DialogueFrameEditorValue,
   DialoguePropertyDefinition,
   DialogueStatDefinition,
+  DialogueTriggerDefinition,
 } from "src/@types/DialogueCanvas"
 import EditDialogueChecksModal from "./edit-dialogue-checks-modal"
 import EditDialogueConditionsModal from "./edit-dialogue-conditions-modal"
@@ -14,6 +20,7 @@ export interface EditDialogueFrameModalOptions {
   characters: DialogueCharacterDefinition[]
   stats: DialogueStatDefinition[]
   properties: DialoguePropertyDefinition[]
+  triggers: DialogueTriggerDefinition[]
   focusTarget?: DialogueFrameFocusTarget
   onSubmit: (value: DialogueFrameEditorValue) => void
   onClose?: () => void
@@ -28,6 +35,7 @@ export default class EditDialogueFrameModal extends Modal {
   private readonly characters: DialogueCharacterDefinition[]
   private readonly stats: DialogueStatDefinition[]
   private readonly properties: DialoguePropertyDefinition[]
+  private readonly triggers: DialogueTriggerDefinition[]
   private readonly onSubmitCallback: (value: DialogueFrameEditorValue) => void
   private readonly onCloseCallback?: () => void
   private pendingFocusTarget?: DialogueFrameFocusTarget
@@ -40,11 +48,13 @@ export default class EditDialogueFrameModal extends Modal {
       speakerId: options.initialValue.speakerId,
       text: options.initialValue.text ?? "",
       choices: options.initialValue.choices?.map(choice => ({ ...choice })) ?? [],
+      actions: options.initialValue.actions?.map(action => ({ ...action })) ?? [],
     }
 
     this.characters = options.characters
     this.stats = options.stats
     this.properties = options.properties
+    this.triggers = options.triggers
     this.onSubmitCallback = options.onSubmit
     this.onCloseCallback = options.onClose
     this.pendingFocusTarget = options.focusTarget
@@ -107,6 +117,7 @@ export default class EditDialogueFrameModal extends Modal {
     this.focusTextareaIfRequested(textarea, { type: "frameText" })
 
     this.renderChoicesSection(contentEl)
+    this.renderActionsSection(contentEl)
 
     new Setting(contentEl)
       .addButton((button: ButtonComponent) => {
@@ -131,6 +142,7 @@ export default class EditDialogueFrameModal extends Modal {
               speakerId: this.value.speakerId || undefined,
               text: this.value.text ?? "",
               choices: this.getValidChoices(),
+              actions: this.getValidActions(),
             })
 
             this.close()
@@ -141,6 +153,250 @@ export default class EditDialogueFrameModal extends Modal {
   onClose() {
     this.contentEl.empty()
     this.onCloseCallback?.()
+  }
+
+  // LLM agent change: frame actions describe side effects that happen when this dialogue frame is entered.
+  private renderActionsSection(contentEl: HTMLElement) {
+    contentEl.createEl("h3", { text: "Actions" })
+
+    const actions = this.value.actions ?? []
+
+    if (actions.length === 0) {
+      contentEl.createEl("p", {
+        text: "No actions yet.",
+      })
+    }
+
+    actions.forEach((action, index) => {
+      const container = contentEl.createDiv()
+      container.addClass("dialogue-canvas-action-editor-row")
+
+      new Setting(container)
+        .setName(`Action ${index + 1}`)
+        .setDesc(this.getActionDescription(action))
+        .addDropdown(dropdown => {
+          dropdown.addOption("trigger", "Trigger")
+          dropdown.addOption("globalProperty", "Global property")
+          dropdown.addOption("characterStat", "Character stat")
+          dropdown.addOption("characterInventory", "Character inventory")
+          dropdown
+            .setValue(action.type)
+            .onChange(value => {
+              actions[index] = this.createAction(value as DialogueFrameActionType)
+              this.render()
+            })
+        })
+        .addButton(button => {
+          button
+            .setButtonText("Remove")
+            .onClick(() => {
+              actions.splice(index, 1)
+              this.render()
+            })
+        })
+
+      this.renderActionFields(container, action)
+    })
+
+    new Setting(contentEl)
+      .addButton(button => {
+        button
+          .setButtonText("Add Action")
+          .onClick(() => {
+            actions.push(this.createAction("trigger"))
+            this.value.actions = actions
+            this.render()
+          })
+      })
+  }
+
+  private renderActionFields(container: HTMLElement, action: DialogueFrameActionData) {
+    if (action.type === "trigger") {
+      new Setting(container)
+        .setName("Trigger")
+        .addDropdown(dropdown => {
+          for (const trigger of this.triggers) {
+            dropdown.addOption(trigger.id, `${trigger.name} (${trigger.id})`)
+          }
+
+          if (this.triggers.length === 0) {
+            dropdown.addOption(action.triggerId, action.triggerId || "No triggers loaded")
+          }
+
+          dropdown
+            .setValue(action.triggerId)
+            .onChange(value => {
+              action.triggerId = value
+            })
+        })
+      return
+    }
+
+    if (action.type === "globalProperty") {
+      new Setting(container)
+        .setName("Property")
+        .addDropdown(dropdown => {
+          for (const property of this.properties) {
+            dropdown.addOption(property.id, `${property.name} (${property.id})`)
+          }
+
+          if (this.properties.length === 0) {
+            dropdown.addOption(action.propertyId, action.propertyId || "No properties loaded")
+          }
+
+          dropdown
+            .setValue(action.propertyId)
+            .onChange(value => {
+              action.propertyId = value
+            })
+        })
+
+      this.renderOperationFields(container, action)
+      return
+    }
+
+    new Setting(container)
+      .setName("Character")
+      .addDropdown(dropdown => {
+        for (const character of this.characters) {
+          dropdown.addOption(character.id, `${character.name} (${character.id})`)
+        }
+
+        if (this.characters.length === 0) {
+          dropdown.addOption(action.characterId, action.characterId || "No characters loaded")
+        }
+
+        dropdown
+          .setValue(action.characterId)
+          .onChange(value => {
+            action.characterId = value
+          })
+      })
+
+    if (action.type === "characterStat") {
+      new Setting(container)
+        .setName("Stat")
+        .addDropdown(dropdown => {
+          for (const stat of this.stats) {
+            dropdown.addOption(stat.id, `${stat.name} (${stat.id})`)
+          }
+
+          if (this.stats.length === 0) {
+            dropdown.addOption(action.statId, action.statId || "No stats loaded")
+          }
+
+          dropdown
+            .setValue(action.statId)
+            .onChange(value => {
+              action.statId = value
+            })
+        })
+
+      this.renderOperationFields(container, action)
+      return
+    }
+
+    new Setting(container)
+      .setName("Item ID")
+      .addText(text => {
+        text
+          .setPlaceholder("medkit")
+          .setValue(action.itemId)
+          .onChange(value => {
+            action.itemId = value.trim()
+          })
+      })
+
+    this.renderOperationFields(container, action)
+  }
+
+  private renderOperationFields(
+    container: HTMLElement,
+    action: Extract<DialogueFrameActionData, { operation: DialogueFrameActionOperation }>
+  ) {
+    new Setting(container)
+      .setName("Operation")
+      .addDropdown(dropdown => {
+        dropdown.addOption("add", "+ add")
+        dropdown.addOption("subtract", "- subtract")
+        dropdown.addOption("set", "= set")
+        dropdown
+          .setValue(action.operation)
+          .onChange(value => {
+            action.operation = value as DialogueFrameActionOperation
+          })
+      })
+
+    this.renderActionValueFields(container, action)
+  }
+
+  private renderActionValueFields(
+    container: HTMLElement,
+    action: Extract<DialogueFrameActionData, { operation: DialogueFrameActionOperation }>
+  ) {
+    const currentValue = this.getActionValue(action)
+    const isRange = this.isRangeValue(currentValue)
+
+    new Setting(container)
+      .setName("Value mode")
+      .addDropdown(dropdown => {
+        dropdown.addOption("fixed", "Fixed")
+        dropdown.addOption("range", "Random range")
+        dropdown
+          .setValue(isRange ? "range" : "fixed")
+          .onChange(value => {
+            if (value === "range") {
+              this.setActionValue(action, this.createRangeValue(currentValue))
+            } else {
+              this.setActionValue(action, this.getFixedValueFromActionValue(currentValue))
+            }
+
+            this.render()
+          })
+      })
+
+    if (isRange) {
+      new Setting(container)
+        .setName("Random range")
+        .addText(text => {
+          text
+            .setPlaceholder("min")
+            .setValue(String(currentValue.min))
+            .onChange(value => {
+              currentValue.min = this.parseNumber(value, currentValue.min)
+            })
+        })
+        .addText(text => {
+          text
+            .setPlaceholder("max")
+            .setValue(String(currentValue.max))
+            .onChange(value => {
+              currentValue.max = this.parseNumber(value, currentValue.max)
+            })
+        })
+        .addDropdown(dropdown => {
+          dropdown.addOption("integer", "Integer")
+          dropdown.addOption("float", "Float")
+          dropdown
+            .setValue(currentValue.numberType)
+            .onChange(value => {
+              currentValue.numberType = value === "float" ? "float" : "integer"
+            })
+        })
+      return
+    }
+
+    new Setting(container)
+      .setName("Value")
+      .addText(text => {
+        text
+          .setPlaceholder("1")
+          .setValue(String(currentValue))
+          .onChange(value => {
+            const parsedNumber = Number(value)
+            this.setActionValue(action, Number.isNaN(parsedNumber) ? value : parsedNumber)
+          })
+      })
   }
 
   // LLM agent change: choices are edited in the frame modal because they belong to the frame node.
@@ -242,6 +498,42 @@ export default class EditDialogueFrameModal extends Modal {
     }
   }
 
+  private createAction(type: DialogueFrameActionType): DialogueFrameActionData {
+    if (type === "globalProperty") {
+      return {
+        type,
+        propertyId: this.properties[0]?.id ?? "",
+        operation: "set",
+        value: this.properties[0]?.type === "bool" ? true : 0,
+      }
+    }
+
+    if (type === "characterStat") {
+      return {
+        type,
+        characterId: this.characters[0]?.id ?? "",
+        statId: this.stats[0]?.id ?? "",
+        operation: "add",
+        value: 1,
+      }
+    }
+
+    if (type === "characterInventory") {
+      return {
+        type,
+        characterId: this.characters[0]?.id ?? "",
+        itemId: "",
+        operation: "add",
+        quantity: 1,
+      }
+    }
+
+    return {
+      type: "trigger",
+      triggerId: this.triggers[0]?.id ?? "",
+    }
+  }
+
   private getValidChoices(): DialogueChoiceData[] {
     const result: DialogueChoiceData[] = []
 
@@ -261,6 +553,24 @@ export default class EditDialogueFrameModal extends Modal {
     }
 
     return result
+  }
+
+  private getValidActions(): DialogueFrameActionData[] {
+    return (this.value.actions ?? []).filter(action => {
+      if (action.type === "trigger") {
+        return Boolean(action.triggerId)
+      }
+
+      if (action.type === "globalProperty") {
+        return Boolean(action.propertyId)
+      }
+
+      if (action.type === "characterStat") {
+        return Boolean(action.characterId && action.statId)
+      }
+
+      return Boolean(action.characterId && action.itemId)
+    })
   }
 
   private openChoiceChecksModal(choice: DialogueChoiceData) {
@@ -321,6 +631,87 @@ export default class EditDialogueFrameModal extends Modal {
     const conditionsCount = choice.conditions?.items?.length ?? 0
 
     return `Internal route ID: ${index + 1}. Checks: ${checksCount}. Conditions: ${conditionsCount}.`
+  }
+
+  private getActionDescription(action: DialogueFrameActionData): string {
+    if (action.type === "trigger") {
+      const trigger = this.triggers.find(item => item.id === action.triggerId)
+      return trigger?.description || "Call a named trigger."
+    }
+
+    const valueText = this.formatActionValue(this.getActionValue(action))
+
+    if (action.type === "globalProperty") {
+      return `${action.operation} global ${action.propertyId} ${valueText}`
+    }
+
+    if (action.type === "characterStat") {
+      return `${action.operation} ${action.characterId}.${action.statId} ${valueText}`
+    }
+
+    return `${action.operation} ${action.characterId}.inventory.${action.itemId || "item"} ${valueText}`
+  }
+
+  private getActionValue(
+    action: Extract<DialogueFrameActionData, { operation: DialogueFrameActionOperation }>
+  ): DialogueFrameActionValue | DialogueFrameActionNumericValue {
+    return "quantity" in action ? action.quantity : action.value
+  }
+
+  private setActionValue(
+    action: Extract<DialogueFrameActionData, { operation: DialogueFrameActionOperation }>,
+    value: DialogueFrameActionValue | DialogueFrameActionNumericValue
+  ) {
+    if ("quantity" in action) {
+      action.quantity = this.normalizeNumericActionValue(value)
+    } else {
+      action.value = value
+    }
+  }
+
+  private normalizeNumericActionValue(value: DialogueFrameActionValue | DialogueFrameActionNumericValue): DialogueFrameActionNumericValue {
+    if (this.isRangeValue(value)) {
+      return value
+    }
+
+    return Number(value) || 0
+  }
+
+  private createRangeValue(value: DialogueFrameActionValue | DialogueFrameActionNumericValue) {
+    const fixedValue = Number(this.getFixedValueFromActionValue(value)) || 0
+
+    return {
+      mode: "range" as const,
+      min: fixedValue,
+      max: fixedValue,
+      numberType: "integer" as const,
+    }
+  }
+
+  private getFixedValueFromActionValue(value: DialogueFrameActionValue | DialogueFrameActionNumericValue): string | number | boolean {
+    if (!this.isRangeValue(value)) {
+      return value
+    }
+
+    return value.min
+  }
+
+  private isRangeValue(value: unknown): value is Extract<DialogueFrameActionValue, { mode: "range" }> {
+    return Boolean(value && typeof value === "object" && (value as { mode?: string }).mode === "range")
+  }
+
+  private parseNumber(value: string, fallback: number): number {
+    const parsed = Number(value)
+    return Number.isNaN(parsed) ? fallback : parsed
+  }
+
+  private formatActionValue(value: DialogueFrameActionValue | DialogueFrameActionNumericValue): string {
+    if (this.isRangeValue(value)) {
+      const suffix = value.numberType === "integer" ? "int" : "float"
+      return `[${value.min}..${value.max} ${suffix}]`
+    }
+
+    return String(value)
   }
 
   private choiceHasFailureSlot(choice: DialogueChoiceData): boolean {

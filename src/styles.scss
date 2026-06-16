@@ -312,6 +312,15 @@
   background: var(--background-secondary);
 }
 
+.dialogue-canvas-action-editor-row {
+  margin: 12px 0;
+  padding: 10px 12px;
+
+  border: 1px solid var(--background-modifier-border);
+  border-left: 4px solid var(--interactive-accent);
+  background: var(--background-secondary);
+}
+
 .dialogue-canvas-choice-textarea-container {
   margin: 8px 0 12px;
 }
