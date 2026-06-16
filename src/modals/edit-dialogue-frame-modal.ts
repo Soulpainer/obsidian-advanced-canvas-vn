@@ -288,13 +288,11 @@ export default class EditDialogueFrameModal extends Modal {
   }
 
   private getChoiceSuccessColor(index: number): string {
-    const colorId = (index * 2) % 6 + 1
-    return `rgb(var(--canvas-color-${colorId}))`
+    return `var(--dialogue-choice-color-${index % 8 + 1})`
   }
 
   private getChoiceFailureColor(index: number): string {
-    const colorId = (index * 2 + 1) % 6 + 1
-    return `rgb(var(--canvas-color-${colorId}))`
+    return this.getChoiceSuccessColor(index)
   }
 
   private generateChoiceId(label: string): string {

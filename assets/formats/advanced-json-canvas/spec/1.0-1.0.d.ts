@@ -10,6 +10,7 @@ export interface CanvasMetadata {
   version: '1.0-1.0'
   frontmatter: { [key: string]: unknown }
   startNode?: string
+  endNode?: string
 }
 
 export type CanvasNodeType = 'text' | 'group' | 'file' | 'link'

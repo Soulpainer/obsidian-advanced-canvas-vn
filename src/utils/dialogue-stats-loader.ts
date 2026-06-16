@@ -61,6 +61,7 @@ export default class DialogueStatsLoader {
 
     const idIndex = headers.indexOf("id")
     const nameIndex = headers.indexOf("name")
+    const iconIndex = headers.indexOf("icon")
     const groupIndex = headers.indexOf("group")
     const descriptionIndex = headers.indexOf("description")
 
@@ -90,6 +91,7 @@ export default class DialogueStatsLoader {
       result.push({
         id,
         name,
+        icon: iconIndex >= 0 ? cells[iconIndex]?.trim() : undefined,
         group: groupIndex >= 0 ? cells[groupIndex]?.trim() : undefined,
         description: descriptionIndex >= 0 ? cells[descriptionIndex]?.trim() : undefined,
       })

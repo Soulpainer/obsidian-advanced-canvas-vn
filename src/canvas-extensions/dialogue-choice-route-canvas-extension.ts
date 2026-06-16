@@ -237,7 +237,7 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
 
     edge.setData({
       ...edgeData,
-      color: this.getRouteColorId(Math.max(choiceIndex, 0), route.outcome),
+      color: this.getRouteCanvasColorId(Math.max(choiceIndex, 0)),
       label: "",
       styleAttributes: {
         ...edgeData.styleAttributes,
@@ -291,7 +291,7 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
       fromSide: "right" as Side,
       toNode: node.id,
       toSide: "left" as Side,
-      color: this.getRouteColorId(choiceIndex, route.outcome),
+      color: this.getRouteCanvasColorId(choiceIndex),
       label: "",
       styleAttributes: {
         path: route.outcome === "failure" ? "short-dashed" : null,
@@ -457,7 +457,7 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
       edge.path.interaction.removeAttribute("data-path")
     }
 
-    this.applyEdgeColor(edge, this.getRouteColorId(choiceIndex, route.outcome))
+    this.applyEdgeColor(edge, this.getRouteColorCss(choiceIndex, route.outcome))
     edge.labelElement?.render()
     this.setEdgeLabelVisible(edge, false)
   }
@@ -511,20 +511,41 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
     return { x: position.x + distance, y: position.y }
   }
 
-  private applyEdgeColor(edge: CanvasEdge, colorId: string) {
-    const colorValue = `var(--canvas-color-${colorId})`
-    const cssColor = `rgb(${colorValue})`
+  private applyEdgeColor(edge: CanvasEdge, cssColor: string) {
+    const resolvedColor = this.resolveCssColor(cssColor)
 
-    edge.lineGroupEl?.style.setProperty("--canvas-color", colorValue)
-    edge.lineEndGroupEl?.style.setProperty("--canvas-color", colorValue)
-    edge.path.display?.style.setProperty("stroke", cssColor)
-    edge.fromLineEnd?.el?.querySelector("polygon")?.setAttribute("style", `fill: ${cssColor}; stroke: ${cssColor};`)
-    edge.toLineEnd?.el?.querySelector("polygon")?.setAttribute("style", `fill: ${cssColor}; stroke: ${cssColor};`)
+    edge.lineGroupEl?.style.setProperty("--canvas-color", resolvedColor)
+    edge.lineEndGroupEl?.style.setProperty("--canvas-color", resolvedColor)
+    edge.path.display?.setAttr("stroke", resolvedColor)
+    edge.path.display?.style.setProperty("stroke", resolvedColor)
+    edge.path.interaction?.removeAttribute("stroke")
+    edge.path.interaction?.style.removeProperty("stroke")
+    edge.fromLineEnd?.el?.querySelector("polygon")?.setAttribute("style", `fill: ${resolvedColor}; stroke: ${resolvedColor};`)
+    edge.toLineEnd?.el?.querySelector("polygon")?.setAttribute("style", `fill: ${resolvedColor}; stroke: ${resolvedColor};`)
   }
 
-  private getRouteColorId(choiceIndex: number, outcome: DialogueChoiceRouteOutcome): string {
-    const base = choiceIndex * 2
-    return String((outcome === "success" ? base : base + 1) % 6 + 1)
+  private resolveCssColor(cssColor: string): string {
+    const probe = activeDocument.createElement("span")
+    probe.style.color = cssColor
+    activeDocument.body.appendChild(probe)
+    const resolvedColor = getComputedStyle(probe).color
+    probe.remove()
+
+    return resolvedColor || cssColor
+  }
+
+  private getRouteCanvasColorId(choiceIndex: number): string {
+    return String(choiceIndex % 6 + 1)
+  }
+
+  private getRouteColorCss(choiceIndex: number, outcome: DialogueChoiceRouteOutcome): string {
+    const colorIndex = choiceIndex % 8 + 1
+
+    if (outcome === "failure") {
+      return `var(--dialogue-choice-failure-color-${colorIndex})`
+    }
+
+    return `var(--dialogue-choice-color-${colorIndex})`
   }
 
   private getMinimumNodeHeightForChoices(choices: DialogueChoiceData[]): number {

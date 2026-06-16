@@ -12,6 +12,27 @@
 @use "styles/presentation";
 @use "styles/portals";
 @use "styles/embeds";
+
+// LLM agent change: dialogue choices use an 8-color palette independent from success/failure outcome.
+:root {
+  --dialogue-choice-color-1: #3b82f6;
+  --dialogue-choice-color-2: #22c55e;
+  --dialogue-choice-color-3: #f59e0b;
+  --dialogue-choice-color-4: #ef4444;
+  --dialogue-choice-color-5: #14b8a6;
+  --dialogue-choice-color-6: #a855f7;
+  --dialogue-choice-color-7: #ec4899;
+  --dialogue-choice-color-8: #84cc16;
+  --dialogue-choice-failure-color-1: #2563eb;
+  --dialogue-choice-failure-color-2: #15803d;
+  --dialogue-choice-failure-color-3: #b45309;
+  --dialogue-choice-failure-color-4: #b91c1c;
+  --dialogue-choice-failure-color-5: #0f766e;
+  --dialogue-choice-failure-color-6: #7e22ce;
+  --dialogue-choice-failure-color-7: #be185d;
+  --dialogue-choice-failure-color-8: #4d7c0f;
+}
+
 .canvas-node.dialogue-canvas-frame-node {
   overflow: visible;
 }
@@ -83,6 +104,25 @@
 
   border-radius: 4px;
   background: var(--interactive-accent);
+  color: var(--text-on-accent);
+
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: 0.06em;
+  pointer-events: none;
+}
+
+.canvas-node.dialogue-canvas-end-node::before {
+  content: "END";
+  position: absolute;
+  top: -18px;
+  right: 10px;
+
+  padding: 2px 6px;
+
+  border-radius: 4px;
+  background: var(--text-error);
   color: var(--text-on-accent);
 
   font-size: 9px;
@@ -306,10 +346,37 @@
   grid-column: 3;
   display: flex;
   gap: 4px;
+  align-items: center;
 
   color: var(--text-muted);
   font-size: 9px;
   text-transform: uppercase;
+}
+
+.dialogue-canvas-choice-stat-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+
+  min-width: 0;
+  padding: 1px 4px;
+
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--dialogue-choice-success-color, var(--interactive-accent)) 18%, var(--background-primary));
+  color: var(--text-normal);
+
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1.2;
+  text-transform: none;
+}
+
+.dialogue-canvas-choice-stat-icon {
+  font-size: 11px;
+}
+
+.dialogue-canvas-choice-stat-value {
+  font-variant-numeric: tabular-nums;
 }
 
 .dialogue-canvas-choice-failure {

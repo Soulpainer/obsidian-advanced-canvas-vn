@@ -7,6 +7,7 @@ import {
   DialogueFrameEditorValue,
   DialogueFailureRouteData,
   DialogueNodeData,
+  DialogueStatDefinition,
 } from "src/@types/DialogueCanvas"
 import CanvasHelper from "src/utils/canvas-helper"
 import CanvasExtension from "./canvas-extension"
@@ -102,29 +103,38 @@ export default class DialogueFrameCanvasExtension extends CanvasExtension {
 
     const nodeData = selectedNodes[0]!.getData() as CanvasNodeDataWithDialogue
 
-    if (nodeData.type && nodeData.type !== "text") {
-      return
+    const isEndNode = canvas.metadata["endNode"] === nodeData.id
+    CanvasHelper.addPopupMenuOption(
+      canvas,
+      CanvasHelper.createPopupMenuOption({
+        id: "dialogue-canvas-set-end-frame",
+        icon: "badge-check",
+        label: isEndNode ? "Unset Dialogue End" : "Set Dialogue End",
+        callback: () => this.toggleDialogueEndNode(canvas, selectedNodes[0]!),
+      })
+    )
+
+    if (!nodeData.type || nodeData.type === "text") {
+      CanvasHelper.addPopupMenuOption(
+        canvas,
+        CanvasHelper.createPopupMenuOption({
+          id: "dialogue-canvas-edit-frame",
+          icon: "user-round",
+          label: "Edit Frame",
+          callback: () => this.openEditFrameModal(canvas, selectedNodes[0]!),
+        })
+      )
+
+      CanvasHelper.addPopupMenuOption(
+        canvas,
+        CanvasHelper.createPopupMenuOption({
+          id: "dialogue-canvas-set-start-frame",
+          icon: "play",
+          label: "Set Dialogue Start",
+          callback: () => this.setDialogueStartNode(canvas, selectedNodes[0]!),
+        })
+      )
     }
-
-    CanvasHelper.addPopupMenuOption(
-      canvas,
-      CanvasHelper.createPopupMenuOption({
-        id: "dialogue-canvas-edit-frame",
-        icon: "user-round",
-        label: "Edit Frame",
-        callback: () => this.openEditFrameModal(canvas, selectedNodes[0]!),
-      })
-    )
-
-    CanvasHelper.addPopupMenuOption(
-      canvas,
-      CanvasHelper.createPopupMenuOption({
-        id: "dialogue-canvas-set-start-frame",
-        icon: "play",
-        label: "Set Dialogue Start",
-        callback: () => this.setDialogueStartNode(canvas, selectedNodes[0]!),
-      })
-    )
   }
 
   private getSelectedNodes(canvas: Canvas): CanvasNode[] {
@@ -227,6 +237,22 @@ export default class DialogueFrameCanvasExtension extends CanvasExtension {
     canvas.requestSave()
     this.scheduleRenderCanvas(canvas)
     new Notice("Dialogue canvas: start node set")
+  }
+
+  // LLM agent change: dialogue endings are canvas-level terminal frame markers, parallel to the start marker.
+  private toggleDialogueEndNode(canvas: Canvas, node: CanvasNode) {
+    const nodeId = node.getData().id
+
+    if (canvas.metadata["endNode"] === nodeId) {
+      delete canvas.metadata["endNode"]
+      new Notice("Dialogue canvas: end node unset")
+    } else {
+      canvas.metadata["endNode"] = nodeId
+      new Notice("Dialogue canvas: end node set")
+    }
+
+    canvas.requestSave()
+    this.scheduleRenderCanvas(canvas)
   }
 
   // LLM agent change: users can resize canvas nodes manually, so dialogue frames clamp back to embedded content size.
@@ -344,21 +370,28 @@ export default class DialogueFrameCanvasExtension extends CanvasExtension {
 
   private async renderAllCanvases() {
     const canvases = this.plugin.getCanvases?.() ?? []
-    const characters = await DialogueCharactersLoader.loadCharacters(this.plugin.app as any)
+    const [characters, stats] = await Promise.all([
+      DialogueCharactersLoader.loadCharacters(this.plugin.app as any),
+      DialogueStatsLoader.loadStats(this.plugin.app as any),
+    ])
 
     for (const canvas of canvases) {
-      this.renderCanvasWithCharacters(canvas, characters)
+      this.renderCanvasWithCharacters(canvas, characters, stats)
     }
   }
 
   private async renderCanvas(canvas: Canvas) {
-    const characters = await DialogueCharactersLoader.loadCharacters(this.plugin.app as any)
-    this.renderCanvasWithCharacters(canvas, characters)
+    const [characters, stats] = await Promise.all([
+      DialogueCharactersLoader.loadCharacters(this.plugin.app as any),
+      DialogueStatsLoader.loadStats(this.plugin.app as any),
+    ])
+    this.renderCanvasWithCharacters(canvas, characters, stats)
   }
 
   private renderCanvasWithCharacters(
     canvas: Canvas,
-    characters: DialogueCharacterDefinition[]
+    characters: DialogueCharacterDefinition[],
+    stats: DialogueStatDefinition[]
   ) {
     this.ensureCanvasObserver(canvas)
 
@@ -366,8 +399,9 @@ export default class DialogueFrameCanvasExtension extends CanvasExtension {
 
     for (const node of nodes) {
       this.renderStartNodeState(canvas, node)
+      this.renderEndNodeState(canvas, node)
       this.renderNodeBadge(canvas, node, characters)
-      this.renderNodeChoices(canvas, node)
+      this.renderNodeChoices(canvas, node, stats)
     }
   }
 
@@ -390,6 +424,22 @@ export default class DialogueFrameCanvasExtension extends CanvasExtension {
       nodeEl.addClass("dialogue-canvas-start-node")
     } else {
       nodeEl.removeClass("dialogue-canvas-start-node")
+    }
+  }
+
+  private renderEndNodeState(canvas: Canvas, node: CanvasNode) {
+    const nodeEl = this.getNodeElement(canvas, node)
+
+    if (!nodeEl) {
+      return
+    }
+
+    const nodeData = node.getData() as CanvasNodeDataWithDialogue
+
+    if (canvas.metadata["endNode"] === nodeData.id) {
+      nodeEl.addClass("dialogue-canvas-end-node")
+    } else {
+      nodeEl.removeClass("dialogue-canvas-end-node")
     }
   }
 
@@ -465,7 +515,7 @@ export default class DialogueFrameCanvasExtension extends CanvasExtension {
   }
 
   // LLM agent change: frame choices are rendered as passive blocks inside the existing canvas node.
-  private renderNodeChoices(canvas: Canvas, node: CanvasNode) {
+  private renderNodeChoices(canvas: Canvas, node: CanvasNode, stats: DialogueStatDefinition[]) {
     const nodeData = node.getData() as CanvasNodeDataWithDialogue
     const nodeEl = this.getNodeElement(canvas, node)
 
@@ -490,6 +540,7 @@ export default class DialogueFrameCanvasExtension extends CanvasExtension {
     const choiceKey = JSON.stringify({
       choices,
       linkedRoutes: [...linkedRoutes].sort(),
+      stats: stats.map(stat => [stat.id, stat.icon ?? ""]),
     })
     const existingList = nodeEl.querySelector(
       ":scope > .dialogue-canvas-choice-list"
@@ -528,13 +579,7 @@ export default class DialogueFrameCanvasExtension extends CanvasExtension {
       const metaEl = choiceEl.createDiv()
       metaEl.addClass("dialogue-canvas-choice-meta")
 
-      if ((choice.checks?.items?.length ?? 0) > 0) {
-        metaEl.createSpan({ text: "check" })
-      }
-
-      if ((choice.conditions?.items?.length ?? 0) > 0) {
-        metaEl.createSpan({ text: "cond" })
-      }
+      this.renderChoiceStatBadges(metaEl, choice, stats)
 
       if (this.choiceHasFailureSlot(choice)) {
         const failureEl = activeDocument.createElement("div")
@@ -571,13 +616,11 @@ export default class DialogueFrameCanvasExtension extends CanvasExtension {
   }
 
   private getChoiceSuccessColor(index: number): string {
-    const colorId = (index * 2) % 6 + 1
-    return `rgb(var(--canvas-color-${colorId}))`
+    return `var(--dialogue-choice-color-${index % 8 + 1})`
   }
 
   private getChoiceFailureColor(index: number): string {
-    const colorId = (index * 2 + 1) % 6 + 1
-    return `rgb(var(--canvas-color-${colorId}))`
+    return this.getChoiceSuccessColor(index)
   }
 
   private getChoiceListHeight(choices: DialogueChoiceData[]): number {
@@ -609,6 +652,46 @@ export default class DialogueFrameCanvasExtension extends CanvasExtension {
 
   private getChoiceRouteKey(choiceId: string, outcome: DialogueChoiceRouteOutcome): string {
     return `${choiceId}:${outcome}`
+  }
+
+  private renderChoiceStatBadges(
+    metaEl: HTMLElement,
+    choice: DialogueChoiceData,
+    stats: DialogueStatDefinition[]
+  ) {
+    const statById = new Map(stats.map(stat => [stat.id, stat]))
+
+    for (const check of choice.checks?.items ?? []) {
+      const stat = statById.get(check.statId)
+      this.createChoiceStatBadge(metaEl, stat, check.threshold)
+    }
+
+    for (const condition of choice.conditions?.items ?? []) {
+      if (condition.source !== "stat") {
+        continue
+      }
+
+      const stat = statById.get(condition.id)
+      this.createChoiceStatBadge(metaEl, stat, condition.value, condition.op)
+    }
+  }
+
+  private createChoiceStatBadge(
+    metaEl: HTMLElement,
+    stat: DialogueStatDefinition | undefined,
+    value: unknown,
+    operator?: string
+  ) {
+    const badgeEl = metaEl.createSpan()
+    badgeEl.addClass("dialogue-canvas-choice-stat-badge")
+    badgeEl.createSpan({
+      cls: "dialogue-canvas-choice-stat-icon",
+      text: stat?.icon || stat?.name?.slice(0, 1) || "?",
+    })
+    badgeEl.createSpan({
+      cls: "dialogue-canvas-choice-stat-value",
+      text: `${operator && operator !== ">=" ? operator : ""}${String(value ?? "")}`,
+    })
   }
 
   private renderNodeBadge(

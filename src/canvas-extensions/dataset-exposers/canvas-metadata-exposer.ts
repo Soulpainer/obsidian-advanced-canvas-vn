@@ -19,9 +19,14 @@ export default class CanvasMetadataExposerExtension extends CanvasExtension {
   private updateExposedSettings(canvas: Canvas) {
     // Expose start node
     const startNodeId = canvas.metadata['startNode']
+    const endNodeId = canvas.metadata['endNode']
     for (const [nodeId, node] of canvas.nodes) {
       if (nodeId === startNodeId) node.nodeEl.dataset.isStartNode = 'true'
       else delete node.nodeEl.dataset.isStartNode
+
+      // LLM agent change: expose the dialogue end node like the existing start node marker.
+      if (nodeId === endNodeId) node.nodeEl.dataset.isEndNode = 'true'
+      else delete node.nodeEl.dataset.isEndNode
     }
   }
 }
