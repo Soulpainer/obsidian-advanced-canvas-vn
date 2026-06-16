@@ -16,6 +16,82 @@
   overflow: visible;
 }
 
+// LLM agent change: route points are tiny transparent helper nodes for shaping dialogue edges.
+.canvas-node.dialogue-canvas-router-node {
+  overflow: visible;
+}
+
+.canvas-node.dialogue-canvas-router-node > .canvas-node-container {
+  border-radius: 50%;
+  border: 3px solid var(--interactive-accent);
+  background: var(--background-primary);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--interactive-accent) 18%, transparent);
+}
+
+.canvas-node.dialogue-canvas-router-node.dialogue-canvas-router-node-is-selected > .canvas-node-container {
+  border-width: 4px;
+  box-shadow:
+    0 0 0 4px var(--background-primary),
+    0 0 0 8px var(--interactive-accent);
+}
+
+.canvas-node.dialogue-canvas-router-node::after {
+  content: "";
+  position: absolute;
+  inset: 6px;
+
+  border-radius: 50%;
+  background: var(--interactive-accent);
+  pointer-events: none;
+}
+
+.canvas-node.dialogue-canvas-router-node.dialogue-canvas-router-node-is-selected::after {
+  inset: 5px;
+}
+
+.canvas-node-interaction-layer[data-is-selected-dialogue-router="true"] {
+  .canvas-node-connection-point {
+    display: none;
+  }
+}
+
+.canvas-node-interaction-layer[data-is-dialogue-router="true"] {
+  .canvas-node-resizer {
+    pointer-events: none;
+    cursor: inherit;
+
+    .canvas-node-connection-point {
+      pointer-events: all;
+    }
+  }
+}
+
+.canvas-node-interaction-layer[data-has-dialogue-router-outgoing-edge="true"] {
+  .canvas-node-connection-point {
+    display: none;
+  }
+}
+
+// LLM agent change: dialogue start is a canvas-level entry point, not tied to a player-only character.
+.canvas-node.dialogue-canvas-start-node::after {
+  content: "START";
+  position: absolute;
+  top: -18px;
+  left: 10px;
+
+  padding: 2px 6px;
+
+  border-radius: 4px;
+  background: var(--interactive-accent);
+  color: var(--text-on-accent);
+
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: 0.06em;
+  pointer-events: none;
+}
+
 .canvas-node > .dialogue-canvas-character-badge {
   position: absolute;
   left: 10px;

@@ -115,6 +115,16 @@ export default class DialogueFrameCanvasExtension extends CanvasExtension {
         callback: () => this.openEditFrameModal(canvas, selectedNodes[0]!),
       })
     )
+
+    CanvasHelper.addPopupMenuOption(
+      canvas,
+      CanvasHelper.createPopupMenuOption({
+        id: "dialogue-canvas-set-start-frame",
+        icon: "play",
+        label: "Set Dialogue Start",
+        callback: () => this.setDialogueStartNode(canvas, selectedNodes[0]!),
+      })
+    )
   }
 
   private getSelectedNodes(canvas: Canvas): CanvasNode[] {
@@ -209,6 +219,14 @@ export default class DialogueFrameCanvasExtension extends CanvasExtension {
     console.log("[Dialogue Canvas] Saved frame data", nextData)
 
     this.scheduleRenderCanvas(canvas)
+  }
+
+  // LLM agent change: dialogue start uses canvas metadata, independent from player/NPC runtime control.
+  private setDialogueStartNode(canvas: Canvas, node: CanvasNode) {
+    canvas.metadata["startNode"] = node.getData().id
+    canvas.requestSave()
+    this.scheduleRenderCanvas(canvas)
+    new Notice("Dialogue canvas: start node set")
   }
 
   // LLM agent change: users can resize canvas nodes manually, so dialogue frames clamp back to embedded content size.
@@ -347,8 +365,31 @@ export default class DialogueFrameCanvasExtension extends CanvasExtension {
     const nodes = this.getCanvasNodes(canvas)
 
     for (const node of nodes) {
+      this.renderStartNodeState(canvas, node)
       this.renderNodeBadge(canvas, node, characters)
       this.renderNodeChoices(canvas, node)
+    }
+  }
+
+  private renderStartNodeState(canvas: Canvas, node: CanvasNode) {
+    const nodeEl = this.getNodeElement(canvas, node)
+
+    if (!nodeEl) {
+      return
+    }
+
+    const nodeData = node.getData() as CanvasNodeDataWithDialogue
+    const isDialogueFrame = Boolean(nodeData["x-dialogue"]?.frame)
+
+    if (!isDialogueFrame) {
+      nodeEl.removeClass("dialogue-canvas-start-node")
+      return
+    }
+
+    if (canvas.metadata["startNode"] === nodeData.id) {
+      nodeEl.addClass("dialogue-canvas-start-node")
+    } else {
+      nodeEl.removeClass("dialogue-canvas-start-node")
     }
   }
 

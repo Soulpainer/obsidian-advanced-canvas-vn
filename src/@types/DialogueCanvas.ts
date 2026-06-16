@@ -16,16 +16,32 @@ export interface DialoguePropertyDefinition {
   description?: string
 }
 
+export type DialogueStatValueMap = Record<string, number>
+
+export interface DialogueInventoryItem {
+  id: string
+  quantity?: number
+}
+
 export interface DialogueCharacterDefinition {
   id: string
   name: string
   portrait?: string
   color?: string
+  stats?: DialogueStatValueMap
+  inventory?: DialogueInventoryItem[]
   description?: string
 }
 
-export interface DialogueNodeData {
-  frame?: DialogueFrameData
+// LLM agent change: player and NPC characters share data; control mode decides who picks choices.
+export type DialogueCharacterControlMode = "manual" | "randomAvailable"
+
+export interface DialogueCharacterRuntimeState {
+  characterId: string
+  controlMode: DialogueCharacterControlMode
+  stats: DialogueStatValueMap
+  inventory: DialogueInventoryItem[]
+  properties?: Record<string, DialogueConditionValue>
 }
 
 export type DialogueChecksMode = "all" | "any"
@@ -91,8 +107,13 @@ export interface DialogueFrameEditorValue extends DialogueFrameData {
   text: string
 }
 
+export interface DialogueRouterData {
+  type: "point"
+}
+
 export interface DialogueNodeData {
   frame?: DialogueFrameData
+  router?: DialogueRouterData
 }
 
 export interface DialogueAnswerData {

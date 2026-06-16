@@ -50,6 +50,7 @@ import CopyNodeReferenceCanvasExtension from './canvas-extensions/copy-node-refe
 import DialogueAnswerCanvasExtension from './canvas-extensions/dialogue-answer-canvas-extension'
 import DialogueChoiceRouteCanvasExtension from './canvas-extensions/dialogue-choice-route-canvas-extension'
 import DialogueFrameCanvasExtension from './canvas-extensions/dialogue-frame-canvas-extension'
+import DialogueRouterCanvasExtension from './canvas-extensions/dialogue-router-canvas-extension'
 
 // Advanced Styles
 import NodeStylesExtension from './canvas-extensions/advanced-styles/node-styles'
@@ -113,6 +114,7 @@ const CANVAS_EXTENSIONS: typeof CanvasExtension[] = [
   EdgeHighlightCanvasExtension,
   AutoFileNodeEdgesCanvasExtension,
   DialogueFrameCanvasExtension,
+  DialogueRouterCanvasExtension,
   DialogueChoiceRouteCanvasExtension,
   DialogueAnswerCanvasExtension,
   FlipEdgeCanvasExtension,

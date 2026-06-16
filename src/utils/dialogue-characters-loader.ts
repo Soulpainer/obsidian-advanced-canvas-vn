@@ -1,5 +1,5 @@
 import { Notice, TFile } from "obsidian"
-import { DialogueCharacterDefinition } from "src/@types/DialogueCanvas"
+import { DialogueCharacterDefinition, DialogueInventoryItem, DialogueStatValueMap } from "src/@types/DialogueCanvas"
 
 const DEFAULT_CHARACTERS_FILE_PATH = "Dialogue/Characters.md"
 
@@ -67,6 +67,8 @@ export default class DialogueCharactersLoader {
     const nameIndex = headers.indexOf("name")
     const portraitIndex = headers.indexOf("portrait")
     const colorIndex = headers.indexOf("color")
+    const statsIndex = headers.indexOf("stats")
+    const inventoryIndex = headers.indexOf("inventory")
     const descriptionIndex = headers.indexOf("description")
 
     if (idIndex < 0 || nameIndex < 0) {
@@ -97,6 +99,8 @@ export default class DialogueCharactersLoader {
         name,
         portrait: portraitIndex >= 0 ? cells[portraitIndex]?.trim() : undefined,
         color: colorIndex >= 0 ? cells[colorIndex]?.trim() : undefined,
+        stats: statsIndex >= 0 ? this.parseStats(cells[statsIndex]) : undefined,
+        inventory: inventoryIndex >= 0 ? this.parseInventory(cells[inventoryIndex]) : undefined,
         description: descriptionIndex >= 0 ? cells[descriptionIndex]?.trim() : undefined,
       })
     }
@@ -110,5 +114,57 @@ export default class DialogueCharactersLoader {
       .replace(/\|$/, "")
       .split("|")
       .map(cell => cell.trim())
+  }
+
+  // LLM agent change: every dialogue character can carry the same runtime data, player-controlled or not.
+  private static parseStats(raw: string | undefined): DialogueStatValueMap | undefined {
+    const text = raw?.trim()
+
+    if (!text) {
+      return undefined
+    }
+
+    const result: DialogueStatValueMap = {}
+
+    for (const part of text.split(/[;,]/)) {
+      const [rawId, rawValue] = part.split("=")
+      const id = rawId?.trim()
+      const value = Number(rawValue?.trim())
+
+      if (!id || Number.isNaN(value)) {
+        continue
+      }
+
+      result[id] = value
+    }
+
+    return Object.keys(result).length > 0 ? result : undefined
+  }
+
+  private static parseInventory(raw: string | undefined): DialogueInventoryItem[] | undefined {
+    const text = raw?.trim()
+
+    if (!text) {
+      return undefined
+    }
+
+    const result: DialogueInventoryItem[] = []
+
+    for (const part of text.split(/[;,]/)) {
+      const [rawId, rawQuantity] = part.split("=")
+      const id = rawId?.trim()
+      const quantity = rawQuantity === undefined ? undefined : Number(rawQuantity.trim())
+
+      if (!id || (quantity !== undefined && Number.isNaN(quantity))) {
+        continue
+      }
+
+      result.push({
+        id,
+        quantity,
+      })
+    }
+
+    return result.length > 0 ? result : undefined
   }
 }
