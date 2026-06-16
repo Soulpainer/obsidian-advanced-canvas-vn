@@ -162,7 +162,10 @@ export default class DialogueRouterCanvasExtension extends CanvasExtension {
       return
     }
 
-    if (menuEl.querySelector("#dialogue-canvas-add-router-point-menu-item")) {
+    if (
+      menuEl.querySelector("#dialogue-canvas-add-router-point-menu-item") &&
+      menuEl.querySelector("#dialogue-canvas-add-frame-menu-item")
+    ) {
       return
     }
 
@@ -178,17 +181,65 @@ export default class DialogueRouterCanvasExtension extends CanvasExtension {
       return
     }
 
-    const menuItem = CanvasHelper.createDropdownOptionElement({
-      label: "Add dialogue route point",
-      icon: "circle-dot",
-      callback: () => {
-        this.createRouterNode(request.canvas, request.position)
-        menuEl.remove()
+    if (!menuEl.querySelector("#dialogue-canvas-add-frame-menu-item")) {
+      const frameMenuItem = CanvasHelper.createDropdownOptionElement({
+        label: "Add dialogue frame",
+        icon: "message-square-plus",
+        callback: () => {
+          this.createDialogueFrameNode(request.canvas, request.position)
+          menuEl.remove()
+        },
+      })
+      frameMenuItem.id = "dialogue-canvas-add-frame-menu-item"
+      frameMenuItem.dataset.section = "create"
+      createGroupEl.appendChild(frameMenuItem)
+    }
+
+    if (!menuEl.querySelector("#dialogue-canvas-add-router-point-menu-item")) {
+      const routerMenuItem = CanvasHelper.createDropdownOptionElement({
+        label: "Add dialogue route point",
+        icon: "circle-dot",
+        callback: () => {
+          this.createRouterNode(request.canvas, request.position)
+          menuEl.remove()
+        },
+      })
+      routerMenuItem.id = "dialogue-canvas-add-router-point-menu-item"
+      routerMenuItem.dataset.section = "create"
+      createGroupEl.appendChild(routerMenuItem)
+    }
+  }
+
+  // LLM agent change: dialogue frames can be created directly from the canvas context menu.
+  private createDialogueFrameNode(canvas: Canvas, position: Position) {
+    const node = canvas.createTextNode({
+      pos: {
+        x: position.x - 180,
+        y: position.y - 110,
+      },
+      size: {
+        width: 360,
+        height: 220,
       },
     })
-    menuItem.id = "dialogue-canvas-add-router-point-menu-item"
-    menuItem.dataset.section = "create"
-    createGroupEl.appendChild(menuItem)
+    const nodeData = node.getData() as CanvasNodeDataWithDialogue
+
+    node.setData({
+      ...nodeData,
+      text: "",
+      width: Math.max(nodeData.width ?? 0, 360),
+      height: Math.max(nodeData.height ?? 0, 220),
+      "x-dialogue": {
+        ...nodeData["x-dialogue"],
+        frame: {
+          frameId: this.generateFrameId(nodeData.id),
+          choices: [],
+        },
+      },
+    })
+    canvas.selectOnly(node)
+    canvas.pushHistory(canvas.getData())
+    this.plugin.app.workspace.trigger("advanced-canvas:dialogue-frame-edit-requested", canvas, node)
   }
 
   // LLM agent change: routing points are transparent dialogue graph helpers, not dialogue frames.
@@ -402,5 +453,16 @@ export default class DialogueRouterCanvasExtension extends CanvasExtension {
     const nodeEl = anyNode.nodeEl
 
     return nodeEl instanceof HTMLElement ? nodeEl : null
+  }
+
+  private generateFrameId(seed: string): string {
+    const normalized = seed
+      .toLowerCase()
+      .trim()
+      .replace(/<[^>]*>/g, "")
+      .replace(/[^a-zа-яё0-9]+/gi, "_")
+      .replace(/^_+|_+$/g, "")
+
+    return normalized.slice(0, 48) || "frame"
   }
 }

@@ -129,16 +129,6 @@ export default class DialogueFrameCanvasExtension extends CanvasExtension {
       CanvasHelper.addPopupMenuOption(
         canvas,
         CanvasHelper.createPopupMenuOption({
-          id: "dialogue-canvas-edit-frame",
-          icon: "user-round",
-          label: "Edit Frame",
-          callback: () => this.openEditFrameModal(canvas, selectedNodes[0]!),
-        })
-      )
-
-      CanvasHelper.addPopupMenuOption(
-        canvas,
-        CanvasHelper.createPopupMenuOption({
           id: "dialogue-canvas-set-start-frame",
           icon: "play",
           label: "Set Dialogue Start",
@@ -297,10 +287,10 @@ export default class DialogueFrameCanvasExtension extends CanvasExtension {
     }
 
     const minHeight = Math.max(
-      frame.speakerId ? this.minSpeakerNodeHeight : 0,
+      this.minSpeakerNodeHeight,
       this.getMinimumNodeHeightForChoices(frame.choices ?? [])
     )
-    const minWidth = (frame.choices?.length ?? 0) > 0 || frame.speakerId
+    const minWidth = (frame.choices?.length ?? 0) > 0 || Boolean(frame)
       ? this.minDialogueNodeWidth
       : 0
     const nextHeight = typeof nodeData.height === "number" ? Math.max(nodeData.height, minHeight) : nodeData.height
@@ -396,7 +386,7 @@ export default class DialogueFrameCanvasExtension extends CanvasExtension {
     nodeData: CanvasNodeDataWithDialogue,
     editorValue: DialogueFrameEditorValue
   ): Partial<CanvasNodeDataWithDialogue> {
-    const hasSpeaker = Boolean(editorValue.speakerId)
+    const hasSpeaker = true
     const hasChoices = (editorValue.choices?.length ?? 0) > 0
     const currentHeight = nodeData.height
 
@@ -548,7 +538,7 @@ export default class DialogueFrameCanvasExtension extends CanvasExtension {
 
         // Игнорируем собственные изменения бейджа, чтобы не гонять цикл.
         if (
-          target.closest(".dialogue-canvas-character-badge") ||
+          target.closest(".dialogue-canvas-character-header") ||
           target.closest(".dialogue-canvas-choice-list")
         ) {
           return false
@@ -878,70 +868,75 @@ export default class DialogueFrameCanvasExtension extends CanvasExtension {
     const frameMeta = nodeData["x-dialogue"]?.frame
     const speakerId = frameMeta?.speakerId
 
-    if (!speakerId) {
-      nodeEl.querySelector(":scope > .dialogue-canvas-character-badge")?.remove()
-      nodeEl.removeClass("dialogue-canvas-has-speaker")
+    if (!frameMeta) {
+      nodeEl.querySelector(":scope > .dialogue-canvas-character-header")?.remove()
       nodeEl.removeClass("dialogue-canvas-frame-node")
       return
     }
 
-    const character = characters.find(item => item.id === speakerId)
+    const character = speakerId ? characters.find(item => item.id === speakerId) : undefined
 
-    if (!character) {
-      nodeEl.querySelector(":scope > .dialogue-canvas-character-badge")?.remove()
-      nodeEl.removeClass("dialogue-canvas-has-speaker")
-      nodeEl.removeClass("dialogue-canvas-frame-node")
-      return
-    }
+    const headerColor = character ? this.getNodeAccentColor(nodeData, nodeEl, character) : undefined
 
-    const badgeColor = this.getNodeAccentColor(nodeData, nodeEl, character)
-
-    const badgeKey = JSON.stringify({
-      speakerId: character.id,
-      name: character.name,
-      portrait: character.portrait ?? "",
-      color: badgeColor ?? character.color ?? "",
+    const headerKey = JSON.stringify({
+      speakerId: character?.id ?? "",
+      name: character?.name ?? "текст",
+      description: character?.description ?? "",
+      portrait: character?.portrait ?? "",
+      color: headerColor ?? character?.color ?? "",
     })
 
-    const existingBadge = nodeEl.querySelector(
-      ":scope > .dialogue-canvas-character-badge"
+    const existingHeader = nodeEl.querySelector(
+      ":scope > .dialogue-canvas-character-header"
     ) as HTMLElement | null
 
-    if (existingBadge?.dataset.dialogueBadgeKey === badgeKey) {
+    if (existingHeader?.dataset.dialogueHeaderKey === headerKey) {
       return
     }
 
-    existingBadge?.remove()
+    existingHeader?.remove()
 
     nodeEl.addClass("dialogue-canvas-frame-node")
     nodeEl.addClass("dialogue-canvas-has-speaker")
 
-    const badge = activeDocument.createElement("div")
-    badge.addClass("dialogue-canvas-character-badge")
-    badge.dataset.dialogueBadgeKey = badgeKey
+    const header = activeDocument.createElement("div")
+    header.addClass("dialogue-canvas-character-header")
+    header.dataset.dialogueHeaderKey = headerKey
 
-    badge.style.removeProperty("--dialogue-character-color")
+    header.style.removeProperty("--dialogue-character-color")
 
-    if (badgeColor) {
-      badge.style.setProperty("--dialogue-character-color", badgeColor)
+    if (headerColor) {
+      header.style.setProperty("--dialogue-character-color", headerColor)
     }
 
-    const portraitEl = badge.createDiv()
+    const portraitEl = header.createDiv()
     portraitEl.addClass("dialogue-canvas-character-portrait")
 
-    if (character.portrait) {
+    if (character?.portrait) {
       const image = portraitEl.createEl("img")
       image.src = this.resolveVaultImagePath(character.portrait)
       image.alt = character.name
-    } else {
+    } else if (character) {
       portraitEl.textContent = this.getInitials(character.name)
+    } else {
+      // LLM agent change: text-only dialogue frames use a pen mark instead of an empty portrait slot.
+      portraitEl.textContent = "✎"
     }
 
-    const nameEl = badge.createDiv()
-    nameEl.addClass("dialogue-canvas-character-name")
-    nameEl.textContent = character.name
+    const labelEl = header.createDiv()
+    labelEl.addClass("dialogue-canvas-character-label")
 
-    nodeEl.appendChild(badge)
+    const nameEl = labelEl.createDiv()
+    nameEl.addClass("dialogue-canvas-character-name")
+    nameEl.textContent = character?.name ?? "текст"
+
+    if (character?.description) {
+      const descriptionEl = labelEl.createDiv()
+      descriptionEl.addClass("dialogue-canvas-character-description")
+      descriptionEl.textContent = character.description
+    }
+
+    nodeEl.appendChild(header)
   }
 
   private getNodeElement(canvas: Canvas, node: CanvasNode): HTMLElement | null {

@@ -25,36 +25,9 @@ import SearchCommandPatcher from './patchers/search-command-patcher'
 // Canvas Extensions
 import CanvasExtension from './canvas-extensions/canvas-extension'
 import MetadataCanvasExtension from './canvas-extensions/metadata-canvas-extension'
-import NodeRatioCanvasExtension from './canvas-extensions/node-ratio-canvas-extension'
-import VariableBreakpointCanvasExtension from './canvas-extensions/variable-breakpoint-canvas-extension'
-import GroupCanvasExtension from './canvas-extensions/group-canvas-extension'
-import PresentationCanvasExtension from './canvas-extensions/presentation-canvas-extension'
-import ZOrderingCanvasExtension from './canvas-extensions/z-ordering-canvas-extension'
-import BetterReadonlyCanvasExtension from './canvas-extensions/better-readonly-canvas-extension'
-import EncapsulateCanvasExtension from './canvas-extensions/encapsulate-canvas-extension'
-import CommandsCanvasExtension from './canvas-extensions/commands-canvas-extension'
-import AutoResizeNodeCanvasExtension from './canvas-extensions/auto-resize-node-canvas-extension'
-import PortalsCanvasExtension from './canvas-extensions/portals-canvas-extension'
-import FrontmatterControlButtonCanvasExtension from './canvas-extensions/frontmatter-control-button-canvas-extension'
-import BetterDefaultSettingsCanvasExtension from './canvas-extensions/better-default-settings-canvas-extension'
-import ColorPaletteCanvasExtension from './canvas-extensions/color-palette-canvas-extension'
-import CollapsibleGroupsCanvasExtension from './canvas-extensions/collapsible-groups-canvas-extension'
-import FocusModeCanvasExtension from './canvas-extensions/focus-mode-canvas-extension'
-import AutoFileNodeEdgesCanvasExtension from './canvas-extensions/auto-file-node-edges-canvas-extension'
-import FlipEdgeCanvasExtension from './canvas-extensions/flip-edge-canvas-extension'
-import EdgeSelectionCanvasExtension from './canvas-extensions/edge-selection-canvas-extension'
-import ExportCanvasExtension from './canvas-extensions/export-canvas-extension'
-import FloatingEdgeCanvasExtension from './canvas-extensions/floating-edge-canvas-extension'
-import EdgeHighlightCanvasExtension from './canvas-extensions/edge-highlight-canvas-extension'
-import CopyNodeReferenceCanvasExtension from './canvas-extensions/copy-node-reference-canvas-extension'
-import DialogueAnswerCanvasExtension from './canvas-extensions/dialogue-answer-canvas-extension'
 import DialogueChoiceRouteCanvasExtension from './canvas-extensions/dialogue-choice-route-canvas-extension'
 import DialogueFrameCanvasExtension from './canvas-extensions/dialogue-frame-canvas-extension'
 import DialogueRouterCanvasExtension from './canvas-extensions/dialogue-router-canvas-extension'
-
-// Advanced Styles
-import NodeStylesExtension from './canvas-extensions/advanced-styles/node-styles'
-import EdgeStylesExtension from './canvas-extensions/advanced-styles/edge-styles'
 
 // Dataset Exposers
 import CanvasMetadataExposerExtension from './canvas-extensions/dataset-exposers/canvas-metadata-exposer'
@@ -86,44 +59,16 @@ const PATCHERS = [
 ]
 
 const CANVAS_EXTENSIONS: typeof CanvasExtension[] = [
-  // Advanced JSON Canvas Extensions
+  // LLM agent change: this fork keeps only quiet canvas infrastructure plus the dialogue system UI.
   MetadataCanvasExtension,
-  NodeStylesExtension,
-  EdgeStylesExtension,
-  NodeRatioCanvasExtension,
-  FloatingEdgeCanvasExtension,
-  AutoResizeNodeCanvasExtension,
-  CollapsibleGroupsCanvasExtension,
-  ColorPaletteCanvasExtension,
-  PresentationCanvasExtension,
-  PortalsCanvasExtension,
-
-  // UI Extensions (Non-savable data)
   CanvasMetadataExposerExtension,
   CanvasWrapperExposerExtension,
   NodeExposerExtension,
   EdgeExposerExtension,
   NodeInteractionExposerExtension,
-
-  FrontmatterControlButtonCanvasExtension,
-  BetterDefaultSettingsCanvasExtension,
-  CommandsCanvasExtension,
-  BetterReadonlyCanvasExtension,
-  GroupCanvasExtension,
-  VariableBreakpointCanvasExtension,
-  EdgeHighlightCanvasExtension,
-  AutoFileNodeEdgesCanvasExtension,
   DialogueFrameCanvasExtension,
   DialogueRouterCanvasExtension,
-  DialogueChoiceRouteCanvasExtension,
-  DialogueAnswerCanvasExtension,
-  FlipEdgeCanvasExtension,
-  ZOrderingCanvasExtension,
-  ExportCanvasExtension,
-  FocusModeCanvasExtension,
-  EncapsulateCanvasExtension,
-  EdgeSelectionCanvasExtension,
-  CopyNodeReferenceCanvasExtension
+  DialogueChoiceRouteCanvasExtension
 ]
 
 export default class AdvancedCanvasPlugin extends Plugin {

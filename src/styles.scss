@@ -37,6 +37,10 @@
   overflow: visible;
 }
 
+.canvas-node.dialogue-canvas-frame-node > .canvas-node-container {
+  overflow: hidden;
+}
+
 // LLM agent change: route points are tiny transparent helper nodes for shaping dialogue edges.
 .canvas-node.dialogue-canvas-router-node {
   overflow: visible;
@@ -132,24 +136,28 @@
   pointer-events: none;
 }
 
-.canvas-node > .dialogue-canvas-character-badge {
+.canvas-node > .dialogue-canvas-character-header {
   position: absolute;
-  left: 10px;
-  top: 10px;
+  left: 0;
+  top: 0;
 
-  right: 10px;
-  min-height: 76px;
+  right: 0;
+  min-height: 82px;
+  padding: 9px 12px;
 
   display: flex;
   flex-direction: row;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
 
   pointer-events: none;
   user-select: none;
   z-index: 3;
 
   color: var(--text-normal);
+  background: var(--dialogue-character-color, var(--background-secondary-alt));
+  border-bottom: 1px solid color-mix(in srgb, var(--background-primary) 35%, transparent);
+  border-radius: var(--radius-l, 8px) var(--radius-l, 8px) 0 0;
   box-sizing: border-box;
 }
 
@@ -166,12 +174,13 @@
 
   overflow: hidden;
 
-  background: var(--background-secondary);
-  border: 2px solid var(--dialogue-character-color, var(--interactive-accent));
+  background: color-mix(in srgb, var(--background-primary) 78%, transparent);
+  border: 2px solid color-mix(in srgb, var(--text-on-accent) 70%, transparent);
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.22);
 
   font-size: 22px;
   font-weight: 700;
+  color: var(--text-normal);
 
   box-sizing: border-box;
 }
@@ -182,28 +191,45 @@
   object-fit: cover;
 }
 
-.dialogue-canvas-character-name {
+.dialogue-canvas-character-label {
   min-width: 0;
   flex: 1 1 auto;
 
-  padding: 6px 8px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 3px;
 
-  border-radius: 4px;
+  color: var(--text-on-accent);
+  overflow: hidden;
+}
 
-  background: var(--dialogue-character-color, var(--background-secondary));
-  color: white;
+.dialogue-canvas-character-name {
+  min-width: 0;
 
-  font-size: 12px;
+  font-size: 14px;
   font-weight: 700;
   line-height: 1.25;
   text-align: left;
 
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
-
   overflow: hidden;
-  white-space: normal;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 
   box-sizing: border-box;
+}
+
+.dialogue-canvas-character-description {
+  min-width: 0;
+
+  color: color-mix(in srgb, var(--text-on-accent) 78%, transparent);
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.25;
+
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 // LLM agent change: dialogue frame content fills the card while reserving internal room for speaker and choices.
