@@ -34,6 +34,7 @@ type CanvasEdgeDataWithDialogue = ReturnType<CanvasEdge["getData"]> & {
   id?: string
   label?: string
   fromNode?: string
+  toNode?: string
   color?: string
   styleAttributes?: { [key: string]: string | null }
   ["x-dialogue"]?: DialogueEdgeData
@@ -151,6 +152,14 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
 
     const rerender = (canvas: Canvas) => this.scheduleRenderCanvas(canvas)
     this.plugin.registerEvent(this.plugin.app.workspace.on("advanced-canvas:edge-changed", rerender))
+    this.plugin.registerEvent(this.plugin.app.workspace.on(
+      "advanced-canvas:edge-rendered:after",
+      (canvas: Canvas, edge: CanvasEdge) => this.renderRouteEdge(canvas, edge)
+    ))
+    this.plugin.registerEvent(this.plugin.app.workspace.on(
+      "advanced-canvas:dialogue-frame-rendered",
+      (canvas: Canvas, node: CanvasNode) => this.renderSourceNodeRoutes(canvas, node)
+    ))
     this.plugin.registerEvent(this.plugin.app.workspace.on("advanced-canvas:node-changed", rerender))
     this.plugin.registerEvent(this.plugin.app.workspace.on("advanced-canvas:node-moved", rerender))
     this.plugin.registerEvent(this.plugin.app.workspace.on("advanced-canvas:node-resized", rerender))
@@ -434,6 +443,19 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
     }
   }
 
+  private renderSourceNodeRoutes(canvas: Canvas, sourceNode: CanvasNode) {
+    for (const edge of canvas.edges.values()) {
+      const edgeData = edge.getData() as CanvasEdgeDataWithDialogue
+
+      if (edgeData.fromNode !== sourceNode.id || !this.getChoiceRoute(edgeData["x-dialogue"]?.route)) {
+        continue
+      }
+
+      // LLM agent change: refresh choice edges immediately after their source frame DOM exists.
+      this.renderRouteEdge(canvas, edge)
+    }
+  }
+
   private renderRouteEdge(canvas: Canvas, edge: CanvasEdge) {
     const edgeData = edge.getData() as CanvasEdgeDataWithDialogue
     const route = this.getChoiceRoute(edgeData["x-dialogue"]?.route)
@@ -454,11 +476,12 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
     }
 
     const anchor = this.getChoiceAnchor(canvas, sourceNode, route.choiceId, route.outcome)
-    const path = this.buildBezierPath(anchor, edge.bezier.to, edge.from.side, edge.to.side)
+    const target = this.getEdgeTargetAnchor(canvas, edge, edgeData)
+    const path = this.buildBezierPath(anchor, target, edge.from.side, edge.to.side)
 
     edge.center = {
-      x: (anchor.x + edge.bezier.to.x) / 2,
-      y: (anchor.y + edge.bezier.to.y) / 2,
+      x: (anchor.x + target.x) / 2,
+      y: (anchor.y + target.y) / 2,
     }
     edge.path.interaction.setAttr("d", path)
     edge.path.display.setAttr("d", path)
@@ -472,7 +495,7 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
     }
 
     this.applyEdgeColor(edge, this.getRouteColorCss(choiceIndex, route.outcome))
-    edge.labelElement?.render()
+    // LLM agent change: do not re-render the native label from our route renderer; it can recursively trigger edge renders.
     this.setEdgeLabelVisible(edge, false)
   }
 
@@ -507,6 +530,39 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
       x: bbox.maxX,
       y: (bbox.minY + bbox.maxY) / 2,
     }
+  }
+
+  private getEdgeTargetAnchor(
+    canvas: Canvas,
+    edge: CanvasEdge,
+    edgeData: CanvasEdgeDataWithDialogue
+  ): Position {
+    const targetNode = edgeData.toNode ? canvas.nodes.get(edgeData.toNode) : edge.to?.node
+
+    if (!targetNode) {
+      return edge.bezier.to
+    }
+
+    // LLM agent change: use the live target node bbox, because native bezier points can be stale/collapsed during load and drag.
+    const bbox = targetNode.getBBox()
+
+    if (edge.to.side === "left") {
+      return { x: bbox.minX, y: (bbox.minY + bbox.maxY) / 2 }
+    }
+
+    if (edge.to.side === "right") {
+      return { x: bbox.maxX, y: (bbox.minY + bbox.maxY) / 2 }
+    }
+
+    if (edge.to.side === "top") {
+      return { x: (bbox.minX + bbox.maxX) / 2, y: bbox.minY }
+    }
+
+    if (edge.to.side === "bottom") {
+      return { x: (bbox.minX + bbox.maxX) / 2, y: bbox.maxY }
+    }
+
+    return edge.bezier.to
   }
 
   private buildBezierPath(from: Position, to: Position, fromSide: string, toSide: string): string {
@@ -549,7 +605,8 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
   }
 
   private getRouteCanvasColorId(choiceIndex: number): string {
-    return String(choiceIndex % 6 + 1)
+    // LLM agent change: keep stored canvas edge colors aligned with the 8 dialogue choice colors.
+    return String(choiceIndex % 8 + 1)
   }
 
   private getRouteColorCss(choiceIndex: number, outcome: DialogueChoiceRouteOutcome): string {

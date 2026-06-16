@@ -475,6 +475,8 @@ export default class CanvasPatcher extends Patcher {
       render: Patcher.OverrideExisting(next => function (...args: any): void {
         const result = next.call(this, ...args)
         that.plugin.app.workspace.trigger('advanced-canvas:edge-changed', this.canvas, this)
+        // LLM agent change: dialogue route renderers need a hook that runs after native edge path rendering.
+        that.plugin.app.workspace.trigger('advanced-canvas:edge-rendered:after', this.canvas, this)
 
         // TODO: EdgeStyleExtension console.count(`Edge Rendered ${this.canvas.isClearing}`)
 

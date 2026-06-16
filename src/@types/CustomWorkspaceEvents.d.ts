@@ -48,6 +48,10 @@ export interface CustomWorkspaceEvents {
   'advanced-canvas:node-changed': (canvas: Canvas, node: CanvasNode) => void
   /** Fired when any edge gets changed */
   'advanced-canvas:edge-changed': (canvas: Canvas, edge: CanvasEdge) => void
+  /** Fired after the native edge render finishes */
+  'advanced-canvas:edge-rendered:after': (canvas: Canvas, edge: CanvasEdge) => void
+  /** Fired after a dialogue frame renders its internal DOM */
+  'advanced-canvas:dialogue-frame-rendered': (canvas: Canvas, node: CanvasNode) => void
   /** Fired when the text content of a node gets changed (While typing) */
   'advanced-canvas:node-text-content-changed': (canvas: Canvas, node: CanvasNode, viewUpdate: any) => void
   /** Fired before an existing edge tries to get dragged */

@@ -21,6 +21,14 @@ const EDGE_PATHFINDING_METHODS: { [key: string]: typeof EdgePathfindingMethod } 
 }
 
 const MAX_LIVE_UPDATE_SELECTION_SIZE = 5
+type DialogueRoutedEdgeData = ReturnType<CanvasEdge["getData"]> & {
+  ["x-dialogue"]?: {
+    route?: {
+      type?: string
+    }
+  }
+}
+
 export default class EdgeStylesExtension extends CanvasExtension {
   cssStylesManager: CssStylesConfigManager<StyleAttribute>
 
@@ -126,6 +134,9 @@ export default class EdgeStylesExtension extends CanvasExtension {
   }
 
   private onEdgeChanged(canvas: Canvas, edge: CanvasEdge) {
+    // LLM agent change: dialogue choice routes draw their own paths and must not recurse through native path relayout.
+    if (this.isDialogueChoiceRoute(edge)) return
+
     // Skip if edge isn't dirty or selected
     if (!canvas.dirty.has(edge) && !canvas.selection.has(edge)) return
 
@@ -185,6 +196,11 @@ export default class EdgeStylesExtension extends CanvasExtension {
   private onEdgeCenterRequested(_canvas: Canvas, edge: CanvasEdge, center: Position) {
     center.x = edge.center?.x ?? center.x
     center.y = edge.center?.y ?? center.y
+  }
+
+  private isDialogueChoiceRoute(edge: CanvasEdge): boolean {
+    const edgeData = edge.getData() as DialogueRoutedEdgeData
+    return edgeData["x-dialogue"]?.route?.type === "choice"
   }
 
   private getArrowPolygonPoints(arrowStyle?: string | null): string {

@@ -537,6 +537,8 @@ export default class DialogueFrameCanvasExtension extends CanvasExtension {
       nodeEl.querySelector(":scope > .dialogue-canvas-choice-list")?.remove()
       nodeEl.removeClass("dialogue-canvas-has-choices")
       nodeEl.style.removeProperty("--dialogue-choice-list-height")
+      // LLM agent change: route edges can refresh after dialogue frame DOM changes.
+      this.plugin.app.workspace.trigger("advanced-canvas:dialogue-frame-rendered", canvas, node)
       return
     }
 
@@ -555,6 +557,8 @@ export default class DialogueFrameCanvasExtension extends CanvasExtension {
     ) as HTMLElement | null
 
     if (existingList?.dataset.dialogueChoiceKey === choiceKey) {
+      // LLM agent change: even unchanged choice DOM may be needed as a fresh edge anchor after native canvas renders.
+      this.plugin.app.workspace.trigger("advanced-canvas:dialogue-frame-rendered", canvas, node)
       return
     }
 
@@ -614,6 +618,8 @@ export default class DialogueFrameCanvasExtension extends CanvasExtension {
     })
 
     nodeEl.appendChild(listEl)
+    // LLM agent change: choice route edges anchor to this freshly rendered DOM.
+    this.plugin.app.workspace.trigger("advanced-canvas:dialogue-frame-rendered", canvas, node)
   }
 
   private choiceHasFailureSlot(choice: DialogueChoiceData): boolean {
@@ -628,7 +634,8 @@ export default class DialogueFrameCanvasExtension extends CanvasExtension {
   }
 
   private getChoiceFailureColor(index: number): string {
-    return this.getChoiceSuccessColor(index)
+    // LLM agent change: failure rows reuse the choice hue, but with the darker failure variant.
+    return `var(--dialogue-choice-failure-color-${index % 8 + 1})`
   }
 
   private getChoiceListHeight(choices: DialogueChoiceData[]): number {
