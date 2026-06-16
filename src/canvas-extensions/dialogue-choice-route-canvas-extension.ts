@@ -135,6 +135,8 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
   private readonly choiceRowHeight = 30
   private readonly choiceFailureRowHeight = 24
   private readonly choicesBottomPadding = 12
+  private readonly renderFrames = new WeakMap<Canvas, number>()
+  private readonly activePointerRenderStops = new WeakMap<Canvas, () => void>()
 
   // LLM agent change: route edges bind to numbered choices stored inside frame nodes.
   isEnabled() {
@@ -369,19 +371,28 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
   }
 
   private scheduleRenderAllCanvases() {
-    window.setTimeout(() => {
-      for (const canvas of this.plugin.getCanvases?.() ?? []) {
-        this.renderCanvas(canvas)
-      }
-    }, 120)
+    for (const canvas of this.plugin.getCanvases?.() ?? []) {
+      this.scheduleRenderCanvas(canvas)
+    }
   }
 
   private scheduleRenderCanvas(canvas: Canvas) {
-    window.setTimeout(() => this.renderCanvas(canvas), 120)
+    if (this.renderFrames.has(canvas)) {
+      return
+    }
+
+    const frameId = window.requestAnimationFrame(() => {
+      this.renderFrames.delete(canvas)
+      this.renderCanvas(canvas)
+    })
+
+    this.renderFrames.set(canvas, frameId)
   }
 
   // LLM agent change: route anchors follow the pointer while a canvas edge connection is being dragged.
   private renderWhilePointerMoves(canvas: Canvas) {
+    this.activePointerRenderStops.get(canvas)?.()
+
     let animationFrameId: number | null = null
     const render = () => {
       if (animationFrameId !== null) {
@@ -395,13 +406,16 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
     }
     const stop = () => {
       activeDocument.removeEventListener("pointermove", render)
+      this.activePointerRenderStops.delete(canvas)
 
       if (animationFrameId !== null) {
         window.cancelAnimationFrame(animationFrameId)
+        animationFrameId = null
       }
 
       this.renderCanvas(canvas)
     }
+    this.activePointerRenderStops.set(canvas, stop)
 
     activeDocument.addEventListener("pointermove", render)
     activeDocument.addEventListener("pointerup", stop, { once: true })

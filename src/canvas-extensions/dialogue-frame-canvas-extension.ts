@@ -35,6 +35,7 @@ type CanvasEdgeDataWithDialogue = {
 
 export default class DialogueFrameCanvasExtension extends CanvasExtension {
   private renderQueued = false
+  private readonly renderFrames = new WeakMap<Canvas, number>()
 
   // Минимальная высота карточки, если у неё есть speaker.
   // Подгони под свой шаг сетки.
@@ -356,16 +357,23 @@ export default class DialogueFrameCanvasExtension extends CanvasExtension {
 
     this.renderQueued = true
 
-    window.setTimeout(() => {
+    window.requestAnimationFrame(() => {
       this.renderQueued = false
       void this.renderAllCanvases()
-    }, 100)
+    })
   }
 
   private scheduleRenderCanvas(canvas: Canvas) {
-    window.setTimeout(() => {
+    if (this.renderFrames.has(canvas)) {
+      return
+    }
+
+    const frameId = window.requestAnimationFrame(() => {
+      this.renderFrames.delete(canvas)
       void this.renderCanvas(canvas)
-    }, 100)
+    })
+
+    this.renderFrames.set(canvas, frameId)
   }
 
   private async renderAllCanvases() {
