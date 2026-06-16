@@ -216,6 +216,41 @@
   box-sizing: border-box;
 }
 
+// LLM agent change: dialogue frames use modal editing, so native markdown content must not receive inline-edit clicks.
+.canvas-node.dialogue-canvas-frame-node > .canvas-node-container > .canvas-node-content,
+.canvas-node.dialogue-canvas-frame-node .markdown-preview-view,
+.canvas-node.dialogue-canvas-frame-node .markdown-source-view,
+.canvas-node.dialogue-canvas-frame-node .cm-editor {
+  pointer-events: none;
+}
+
+.canvas-node.dialogue-canvas-frame-node > .canvas-node-container > .canvas-node-content {
+  visibility: hidden;
+}
+
+.canvas-node > .dialogue-canvas-frame-text {
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  top: 12px;
+  bottom: calc(var(--dialogue-choice-list-height, 0px) + 24px);
+
+  overflow: hidden;
+  white-space: pre-wrap;
+
+  color: var(--text-normal);
+  font-size: var(--font-text-size);
+  line-height: 1.35;
+
+  pointer-events: none;
+  user-select: none;
+  z-index: 1;
+}
+
+.canvas-node.dialogue-canvas-frame-node.dialogue-canvas-has-speaker > .dialogue-canvas-frame-text {
+  top: 92px;
+}
+
 .canvas-node.dialogue-canvas-frame-node .markdown-preview-view,
 .canvas-node.dialogue-canvas-frame-node .markdown-source-view {
   padding: 12px 12px calc(var(--dialogue-choice-list-height, 0px) + 24px) 12px;
@@ -295,7 +330,7 @@
 }
 
 .dialogue-canvas-choice-row {
-  pointer-events: none;
+  pointer-events: auto;
   position: relative;
 
   min-height: 22px;
@@ -380,7 +415,7 @@
 }
 
 .dialogue-canvas-choice-failure {
-  pointer-events: none;
+  pointer-events: auto;
   position: relative;
 
   grid-column: 1 / 4;

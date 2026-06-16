@@ -52,6 +52,10 @@ export interface CustomWorkspaceEvents {
   'advanced-canvas:edge-rendered:after': (canvas: Canvas, edge: CanvasEdge) => void
   /** Fired after a dialogue frame renders its internal DOM */
   'advanced-canvas:dialogue-frame-rendered': (canvas: Canvas, node: CanvasNode) => void
+  /** Fired after an edge route is bound to a dialogue choice */
+  'advanced-canvas:dialogue-choice-route-changed': (canvas: Canvas, sourceNode: CanvasNode) => void
+  /** Fired when native inline edit should be replaced by dialogue frame modal editing */
+  'advanced-canvas:dialogue-frame-edit-requested': (canvas: Canvas, node: CanvasNode) => void
   /** Fired when the text content of a node gets changed (While typing) */
   'advanced-canvas:node-text-content-changed': (canvas: Canvas, node: CanvasNode, viewUpdate: any) => void
   /** Fired before an existing edge tries to get dragged */

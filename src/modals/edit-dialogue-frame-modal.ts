@@ -14,8 +14,14 @@ export interface EditDialogueFrameModalOptions {
   characters: DialogueCharacterDefinition[]
   stats: DialogueStatDefinition[]
   properties: DialoguePropertyDefinition[]
+  focusTarget?: DialogueFrameFocusTarget
   onSubmit: (value: DialogueFrameEditorValue) => void
+  onClose?: () => void
 }
+
+export type DialogueFrameFocusTarget =
+  | { type: "frameText" }
+  | { type: "choiceText", choiceId: string }
 
 export default class EditDialogueFrameModal extends Modal {
   private value: DialogueFrameEditorValue
@@ -23,6 +29,8 @@ export default class EditDialogueFrameModal extends Modal {
   private readonly stats: DialogueStatDefinition[]
   private readonly properties: DialoguePropertyDefinition[]
   private readonly onSubmitCallback: (value: DialogueFrameEditorValue) => void
+  private readonly onCloseCallback?: () => void
+  private pendingFocusTarget?: DialogueFrameFocusTarget
 
   constructor(app: any, options: EditDialogueFrameModalOptions) {
     super(app)
@@ -38,6 +46,8 @@ export default class EditDialogueFrameModal extends Modal {
     this.stats = options.stats
     this.properties = options.properties
     this.onSubmitCallback = options.onSubmit
+    this.onCloseCallback = options.onClose
+    this.pendingFocusTarget = options.focusTarget
   }
 
   onOpen() {
@@ -94,6 +104,7 @@ export default class EditDialogueFrameModal extends Modal {
     textarea.addEventListener("input", () => {
       this.value.text = textarea.value
     })
+    this.focusTextareaIfRequested(textarea, { type: "frameText" })
 
     this.renderChoicesSection(contentEl)
 
@@ -129,6 +140,7 @@ export default class EditDialogueFrameModal extends Modal {
 
   onClose() {
     this.contentEl.empty()
+    this.onCloseCallback?.()
   }
 
   // LLM agent change: choices are edited in the frame modal because they belong to the frame node.
@@ -190,6 +202,7 @@ export default class EditDialogueFrameModal extends Modal {
       textarea.addEventListener("input", () => {
         choice.text = textarea.value
       })
+      this.focusTextareaIfRequested(textarea, { type: "choiceText", choiceId: choice.choiceId })
 
       new Setting(container)
         .setName("Hide when unavailable")
@@ -271,6 +284,36 @@ export default class EditDialogueFrameModal extends Modal {
         this.render()
       },
     }).open()
+  }
+
+  private focusTextareaIfRequested(textarea: HTMLTextAreaElement, target: DialogueFrameFocusTarget) {
+    if (!this.isFocusTargetMatch(target)) {
+      return
+    }
+
+    const focusTarget = this.pendingFocusTarget
+    this.pendingFocusTarget = undefined
+
+    window.requestAnimationFrame(() => {
+      // LLM agent change: double-clicking a dialogue row opens the modal directly on the relevant text field.
+      textarea.focus()
+      textarea.select()
+      textarea.scrollIntoView({ block: "center" })
+    })
+  }
+
+  private isFocusTargetMatch(target: DialogueFrameFocusTarget): boolean {
+    const pending = this.pendingFocusTarget
+
+    if (!pending || pending.type !== target.type) {
+      return false
+    }
+
+    if (pending.type === "choiceText" && target.type === "choiceText") {
+      return pending.choiceId === target.choiceId
+    }
+
+    return pending.type === "frameText"
   }
 
   private getChoiceSettingsDescription(choice: DialogueChoiceData, index: number): string {

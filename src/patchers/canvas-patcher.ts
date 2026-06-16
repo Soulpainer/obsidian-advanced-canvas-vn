@@ -402,6 +402,16 @@ export default class CanvasPatcher extends Patcher {
         this.nodeEl.style.zIndex = this.zIndex.toString()
       }),
       setIsEditing: Patcher.OverrideExisting(next => function (editing: boolean, ...args: any): void {
+        const nodeData = this.getData() as CanvasNodeData & { ["x-dialogue"]?: { frame?: unknown } }
+
+        if (editing && nodeData["x-dialogue"]?.frame) {
+          // LLM agent change: dialogue frames are edited through their modal, never through inline canvas text editing.
+          if (this.isEditing) next.call(this, false, ...args)
+          that.plugin.app.workspace.trigger('advanced-canvas:node-editing-state-changed', this.canvas, node, false)
+          that.plugin.app.workspace.trigger('advanced-canvas:dialogue-frame-edit-requested', this.canvas, node)
+          return
+        }
+
         const result = next.call(this, editing, ...args)
         that.plugin.app.workspace.trigger('advanced-canvas:node-editing-state-changed', this.canvas, node, editing)
         return result

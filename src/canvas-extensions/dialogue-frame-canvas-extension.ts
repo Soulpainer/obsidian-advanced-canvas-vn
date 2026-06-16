@@ -14,7 +14,7 @@ import CanvasExtension from "./canvas-extension"
 import DialogueCharactersLoader from "src/utils/dialogue-characters-loader"
 import DialoguePropertiesLoader from "src/utils/dialogue-properties-loader"
 import DialogueStatsLoader from "src/utils/dialogue-stats-loader"
-import EditDialogueFrameModal from "src/modals/edit-dialogue-frame-modal"
+import EditDialogueFrameModal, { DialogueFrameFocusTarget } from "src/modals/edit-dialogue-frame-modal"
 
 type CanvasNodeDataWithDialogue = ReturnType<CanvasNode["getData"]> & {
   id: string
@@ -36,6 +36,7 @@ type CanvasEdgeDataWithDialogue = {
 export default class DialogueFrameCanvasExtension extends CanvasExtension {
   private renderQueued = false
   private readonly renderFrames = new WeakMap<Canvas, number>()
+  private readonly editModalOpenNodes = new WeakSet<CanvasNode>()
 
   // Минимальная высота карточки, если у неё есть speaker.
   // Подгони под свой шаг сетки.
@@ -82,6 +83,12 @@ export default class DialogueFrameCanvasExtension extends CanvasExtension {
     )
 
     this.plugin.registerEvent(
+      this.plugin.app.workspace.on("advanced-canvas:dialogue-frame-edit-requested", (canvas: Canvas, node: CanvasNode) => {
+        this.openDialogueFrameFromNativeEditRequest(canvas, node)
+      })
+    )
+
+    this.plugin.registerEvent(
       this.plugin.app.workspace.on("active-leaf-change", () => {
         this.scheduleRenderAllCanvases()
       })
@@ -89,8 +96,11 @@ export default class DialogueFrameCanvasExtension extends CanvasExtension {
 
     const rerenderCanvas = (canvas: Canvas) => this.scheduleRenderCanvas(canvas)
     this.plugin.registerEvent(this.plugin.app.workspace.on("advanced-canvas:edge-created", rerenderCanvas))
-    this.plugin.registerEvent(this.plugin.app.workspace.on("advanced-canvas:edge-changed", rerenderCanvas))
     this.plugin.registerEvent(this.plugin.app.workspace.on("advanced-canvas:edge-removed", rerenderCanvas))
+    this.plugin.registerEvent(this.plugin.app.workspace.on(
+      "advanced-canvas:dialogue-choice-route-changed",
+      (canvas: Canvas) => this.scheduleRenderCanvas(canvas)
+    ))
 
     this.scheduleRenderAllCanvases()
   }
@@ -157,7 +167,12 @@ export default class DialogueFrameCanvasExtension extends CanvasExtension {
     }) as CanvasNode[]
   }
 
-  private async openEditFrameModal(canvas: Canvas, node: CanvasNode) {
+  private async openEditFrameModal(canvas: Canvas, node: CanvasNode, focusTarget?: DialogueFrameFocusTarget) {
+    if (this.editModalOpenNodes.has(node)) {
+      return
+    }
+
+    this.editModalOpenNodes.add(node)
     const nodeData = node.getData() as CanvasNodeDataWithDialogue
     const frameMeta = nodeData["x-dialogue"]?.frame
     const [characters, stats, properties] = await Promise.all([
@@ -188,10 +203,26 @@ export default class DialogueFrameCanvasExtension extends CanvasExtension {
       characters,
       stats,
       properties,
+      focusTarget,
       onSubmit: value => {
         this.saveDialogueFrame(canvas, node, value)
       },
+      onClose: () => {
+        this.editModalOpenNodes.delete(node)
+      },
     }).open()
+  }
+
+  private openDialogueFrameFromNativeEditRequest(canvas: Canvas, node: CanvasNode) {
+    const nodeData = node.getData() as CanvasNodeDataWithDialogue
+
+    if (!nodeData["x-dialogue"]?.frame) {
+      return
+    }
+
+    this.exitInlineEditing(node)
+    // LLM agent change: native canvas edit button opens the dialogue frame modal instead of inline editing.
+    void this.openEditFrameModal(canvas, node, { type: "frameText" })
   }
 
   private saveDialogueFrame(
@@ -318,8 +349,47 @@ export default class DialogueFrameCanvasExtension extends CanvasExtension {
       return
     }
 
+    const choiceEl = target.closest(".dialogue-canvas-choice-row, .dialogue-canvas-choice-failure") as HTMLElement | null
+    const focusTarget: DialogueFrameFocusTarget = choiceEl?.dataset.dialogueChoiceId
+      ? { type: "choiceText", choiceId: choiceEl.dataset.dialogueChoiceId }
+      : { type: "frameText" }
+
     preventDefault.value = true
-    void this.openEditFrameModal(canvas, node)
+    this.exitInlineEditing(node)
+    // LLM agent change: double-clicking a dialogue frame opens modal editing, never inline canvas editing.
+    void this.openEditFrameModal(canvas, node, focusTarget)
+  }
+
+  private exitInlineEditing(node: CanvasNode) {
+    // LLM agent change: the first click of a double-click can leave native canvas inline editing active.
+    node.setIsEditing(false)
+    this.cleanInlineEditingDom(node)
+    window.requestAnimationFrame(() => {
+      node.setIsEditing(false)
+      this.cleanInlineEditingDom(node)
+    })
+  }
+
+  private cleanInlineEditingDom(node: CanvasNode) {
+    const nodeEl = this.getNodeElement(node.canvas, node)
+
+    if (!nodeEl) {
+      return
+    }
+
+    nodeEl.removeClass("is-editing")
+    nodeEl.removeClass("mod-editing")
+    nodeEl.removeClass("is-focused")
+
+    const activeElement = activeDocument.activeElement
+
+    if (
+      activeElement instanceof HTMLElement &&
+      (activeElement.closest(".markdown-source-view") || activeElement.closest(".cm-editor")) &&
+      nodeEl.contains(activeElement)
+    ) {
+      activeElement.blur()
+    }
   }
 
   private applySpeakerMinHeight(
@@ -410,6 +480,7 @@ export default class DialogueFrameCanvasExtension extends CanvasExtension {
       this.renderEndNodeState(canvas, node)
       this.renderNodeBadge(canvas, node, characters)
       this.renderNodeChoices(canvas, node, stats)
+      this.renderNodeText(canvas, node)
     }
   }
 
@@ -460,6 +531,13 @@ export default class DialogueFrameCanvasExtension extends CanvasExtension {
 
     this.observedCanvasWrappers.add(wrapperEl)
 
+    const suppressInlineEdit = (event: MouseEvent) => {
+      this.suppressDialogueInlineEdit(canvas, event)
+    }
+
+    wrapperEl.addEventListener("mousedown", suppressInlineEdit, true)
+    wrapperEl.addEventListener("click", suppressInlineEdit, true)
+
     const observer = new MutationObserver(mutations => {
       const hasRelevantMutation = mutations.some(mutation => {
         const target = mutation.target
@@ -495,8 +573,46 @@ export default class DialogueFrameCanvasExtension extends CanvasExtension {
     })
 
     this.plugin.register(() => {
+      wrapperEl.removeEventListener("mousedown", suppressInlineEdit, true)
+      wrapperEl.removeEventListener("click", suppressInlineEdit, true)
       observer.disconnect()
     })
+  }
+
+  private suppressDialogueInlineEdit(canvas: Canvas, event: MouseEvent) {
+    if (event.detail < 2) {
+      return
+    }
+
+    const target = event.target
+
+    if (!(target instanceof HTMLElement)) {
+      return
+    }
+
+    const nodeEl = target.closest(".canvas-node.dialogue-canvas-frame-node") as HTMLElement | null
+
+    if (!nodeEl) {
+      return
+    }
+
+    const node = this.getCanvasNodes(canvas).find(candidate => this.getNodeElement(canvas, candidate) === nodeEl)
+
+    if (!node) {
+      return
+    }
+
+    const nodeData = node.getData() as CanvasNodeDataWithDialogue
+
+    if (!nodeData["x-dialogue"]?.frame) {
+      return
+    }
+
+    // LLM agent change: the second click of a double-click must not enter native inline markdown editing.
+    event.preventDefault()
+    event.stopPropagation()
+    event.stopImmediatePropagation()
+    this.exitInlineEditing(node)
   }
 
   private getCanvasNodes(canvas: Canvas): CanvasNode[] {
@@ -507,6 +623,44 @@ export default class DialogueFrameCanvasExtension extends CanvasExtension {
     }
 
     return [...nodesMap.values()] as CanvasNode[]
+  }
+
+  // LLM agent change: dialogue text is rendered by the dialogue layer, so native markdown editing cannot disturb layout.
+  private renderNodeText(canvas: Canvas, node: CanvasNode) {
+    const nodeData = node.getData() as CanvasNodeDataWithDialogue
+    const nodeEl = this.getNodeElement(canvas, node)
+
+    if (!nodeEl) {
+      return
+    }
+
+    if (!nodeData["x-dialogue"]?.frame) {
+      nodeEl.querySelector(":scope > .dialogue-canvas-frame-text")?.remove()
+      return
+    }
+
+    nodeEl.addClass("dialogue-canvas-frame-node")
+
+    const text = nodeData.text ?? ""
+    const textKey = JSON.stringify({
+      text,
+      speakerId: nodeData["x-dialogue"].frame.speakerId ?? "",
+      choiceHeight: nodeEl.style.getPropertyValue("--dialogue-choice-list-height"),
+    })
+    const existingTextEl = nodeEl.querySelector(":scope > .dialogue-canvas-frame-text") as HTMLElement | null
+
+    if (existingTextEl?.dataset.dialogueFrameTextKey === textKey) {
+      return
+    }
+
+    existingTextEl?.remove()
+
+    const textEl = activeDocument.createElement("div")
+    textEl.addClass("dialogue-canvas-frame-text")
+    textEl.dataset.dialogueFrameTextKey = textKey
+    textEl.textContent = text
+
+    nodeEl.appendChild(textEl)
   }
 
   // LLM agent change: embedded choices are part of the frame node, so node height must reserve their rows.

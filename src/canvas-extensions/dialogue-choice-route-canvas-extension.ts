@@ -151,7 +151,6 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
     ))
 
     const rerender = (canvas: Canvas) => this.scheduleRenderCanvas(canvas)
-    this.plugin.registerEvent(this.plugin.app.workspace.on("advanced-canvas:edge-changed", rerender))
     this.plugin.registerEvent(this.plugin.app.workspace.on(
       "advanced-canvas:edge-rendered:after",
       (canvas: Canvas, edge: CanvasEdge) => this.renderRouteEdge(canvas, edge)
@@ -161,8 +160,14 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
       (canvas: Canvas, node: CanvasNode) => this.renderSourceNodeRoutes(canvas, node)
     ))
     this.plugin.registerEvent(this.plugin.app.workspace.on("advanced-canvas:node-changed", rerender))
-    this.plugin.registerEvent(this.plugin.app.workspace.on("advanced-canvas:node-moved", rerender))
-    this.plugin.registerEvent(this.plugin.app.workspace.on("advanced-canvas:node-resized", rerender))
+    this.plugin.registerEvent(this.plugin.app.workspace.on(
+      "advanced-canvas:node-moved",
+      (canvas: Canvas, node: CanvasNode) => this.renderNodeRoutes(canvas, node)
+    ))
+    this.plugin.registerEvent(this.plugin.app.workspace.on(
+      "advanced-canvas:node-resized",
+      (canvas: Canvas, node: CanvasNode) => this.renderNodeRoutes(canvas, node)
+    ))
     this.plugin.registerEvent(this.plugin.app.workspace.on(
       "advanced-canvas:edge-connection-dragging:before",
       (canvas: Canvas) => this.renderWhilePointerMoves(canvas)
@@ -257,6 +262,7 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
       "x-dialogue": nextXDialogue,
     })
     canvas.pushHistory(canvas.getData())
+    this.plugin.app.workspace.trigger("advanced-canvas:dialogue-choice-route-changed", canvas, sourceNode)
     this.scheduleRenderCanvas(canvas)
   }
 
@@ -327,6 +333,7 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
     canvas.importData({ nodes: [], edges: [edgeData] }, false, false)
     canvas.selectOnly(node)
     canvas.pushHistory(canvas.getData())
+    this.plugin.app.workspace.trigger("advanced-canvas:dialogue-choice-route-changed", canvas, sourceNode)
     this.scheduleRenderCanvas(canvas)
 
     await this.openFrameModal(canvas, node)
@@ -452,6 +459,22 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
       }
 
       // LLM agent change: refresh choice edges immediately after their source frame DOM exists.
+      this.renderRouteEdge(canvas, edge)
+    }
+  }
+
+  private renderNodeRoutes(canvas: Canvas, node: CanvasNode) {
+    for (const edge of canvas.edges.values()) {
+      const edgeData = edge.getData() as CanvasEdgeDataWithDialogue
+
+      if (
+        (edgeData.fromNode !== node.id && edgeData.toNode !== node.id) ||
+        !this.getChoiceRoute(edgeData["x-dialogue"]?.route)
+      ) {
+        continue
+      }
+
+      // LLM agent change: node moves only refresh directly attached dialogue choice routes.
       this.renderRouteEdge(canvas, edge)
     }
   }
