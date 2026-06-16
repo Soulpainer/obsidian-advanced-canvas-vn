@@ -39,6 +39,8 @@ export default class EditDialogueFrameModal extends Modal {
   private readonly onSubmitCallback: (value: DialogueFrameEditorValue) => void
   private readonly onCloseCallback?: () => void
   private pendingFocusTarget?: DialogueFrameFocusTarget
+  private readonly collapsedChoiceIds = new Set<string>()
+  private readonly collapsedActionIndexes = new Set<number>()
 
   constructor(app: any, options: EditDialogueFrameModalOptions) {
     super(app)
@@ -157,9 +159,18 @@ export default class EditDialogueFrameModal extends Modal {
 
   // LLM agent change: frame actions describe side effects that happen when this dialogue frame is entered.
   private renderActionsSection(contentEl: HTMLElement) {
-    contentEl.createEl("h3", { text: "Actions" })
-
     const actions = this.value.actions ?? []
+    const allCollapsed = actions.length > 0 && actions.every((_action, index) => this.collapsedActionIndexes.has(index))
+
+    this.renderSectionHeader(contentEl, "Actions", allCollapsed ? "Expand all" : "Collapse all", () => {
+      if (allCollapsed) {
+        this.collapsedActionIndexes.clear()
+      } else {
+        actions.forEach((_action, index) => this.collapsedActionIndexes.add(index))
+      }
+
+      this.render()
+    })
 
     if (actions.length === 0) {
       contentEl.createEl("p", {
@@ -170,10 +181,24 @@ export default class EditDialogueFrameModal extends Modal {
     actions.forEach((action, index) => {
       const container = contentEl.createDiv()
       container.addClass("dialogue-canvas-action-editor-row")
+      const isCollapsed = this.collapsedActionIndexes.has(index)
 
       new Setting(container)
         .setName(`Action ${index + 1}`)
         .setDesc(this.getActionDescription(action))
+        .addButton(button => {
+          button
+            .setButtonText(isCollapsed ? "Expand" : "Collapse")
+            .onClick(() => {
+              if (isCollapsed) {
+                this.collapsedActionIndexes.delete(index)
+              } else {
+                this.collapsedActionIndexes.add(index)
+              }
+
+              this.render()
+            })
+        })
         .addDropdown(dropdown => {
           dropdown.addOption("trigger", "Trigger")
           dropdown.addOption("globalProperty", "Global property")
@@ -191,9 +216,14 @@ export default class EditDialogueFrameModal extends Modal {
             .setButtonText("Remove")
             .onClick(() => {
               actions.splice(index, 1)
+              this.collapsedActionIndexes.delete(index)
               this.render()
             })
         })
+
+      if (isCollapsed) {
+        return
+      }
 
       this.renderActionFields(container, action)
     })
@@ -401,9 +431,18 @@ export default class EditDialogueFrameModal extends Modal {
 
   // LLM agent change: choices are edited in the frame modal because they belong to the frame node.
   private renderChoicesSection(contentEl: HTMLElement) {
-    contentEl.createEl("h3", { text: "Choices" })
-
     const choices = this.value.choices ?? []
+    const allCollapsed = choices.length > 0 && choices.every(choice => this.collapsedChoiceIds.has(choice.choiceId))
+
+    this.renderSectionHeader(contentEl, "Choices", allCollapsed ? "Expand all" : "Collapse all", () => {
+      if (allCollapsed) {
+        this.collapsedChoiceIds.clear()
+      } else {
+        choices.forEach(choice => this.collapsedChoiceIds.add(choice.choiceId))
+      }
+
+      this.render()
+    })
 
     if (choices.length === 0) {
       contentEl.createEl("p", {
@@ -416,10 +455,24 @@ export default class EditDialogueFrameModal extends Modal {
       container.addClass("dialogue-canvas-choice-editor-row")
       container.style.setProperty("--dialogue-choice-success-color", this.getChoiceSuccessColor(index))
       container.style.setProperty("--dialogue-choice-failure-color", this.getChoiceFailureColor(index))
+      const isCollapsed = this.collapsedChoiceIds.has(choice.choiceId) && !this.isPendingChoiceFocus(choice.choiceId)
 
       new Setting(container)
         .setName(`Choice ${index + 1}`)
         .setDesc(this.getChoiceSettingsDescription(choice, index))
+        .addButton(button => {
+          button
+            .setButtonText(isCollapsed ? "Expand" : "Collapse")
+            .onClick(() => {
+              if (isCollapsed) {
+                this.collapsedChoiceIds.delete(choice.choiceId)
+              } else {
+                this.collapsedChoiceIds.add(choice.choiceId)
+              }
+
+              this.render()
+            })
+        })
         .addButton(button => {
           button
             .setButtonText("Checks")
@@ -439,9 +492,14 @@ export default class EditDialogueFrameModal extends Modal {
             .setButtonText("Remove")
             .onClick(() => {
               choices.splice(index, 1)
+              this.collapsedChoiceIds.delete(choice.choiceId)
               this.render()
             })
         })
+
+      if (isCollapsed) {
+        return
+      }
 
       const textContainer = container.createDiv()
       textContainer.addClass("dialogue-canvas-choice-textarea-container")
@@ -496,6 +554,17 @@ export default class EditDialogueFrameModal extends Modal {
       text: "Choice",
       hideWhenUnavailable: true,
     }
+  }
+
+  private renderSectionHeader(contentEl: HTMLElement, title: string, buttonText: string, onClick: () => void) {
+    const headerEl = contentEl.createDiv()
+    headerEl.addClass("dialogue-canvas-editor-section-header")
+
+    headerEl.createEl("h3", { text: title })
+
+    new ButtonComponent(headerEl)
+      .setButtonText(buttonText)
+      .onClick(onClick)
   }
 
   private createAction(type: DialogueFrameActionType): DialogueFrameActionData {
@@ -624,6 +693,10 @@ export default class EditDialogueFrameModal extends Modal {
     }
 
     return pending.type === "frameText"
+  }
+
+  private isPendingChoiceFocus(choiceId: string): boolean {
+    return this.pendingFocusTarget?.type === "choiceText" && this.pendingFocusTarget.choiceId === choiceId
   }
 
   private getChoiceSettingsDescription(choice: DialogueChoiceData, index: number): string {

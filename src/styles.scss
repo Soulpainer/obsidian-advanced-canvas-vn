@@ -232,6 +232,28 @@
   white-space: nowrap;
 }
 
+.canvas-node > .dialogue-canvas-action-indicator {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+
+  padding: 2px 6px;
+
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--background-primary) 82%, transparent);
+  color: var(--text-normal);
+  border: 1px solid color-mix(in srgb, var(--text-normal) 20%, transparent);
+
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1.2;
+  letter-spacing: 0.04em;
+
+  pointer-events: none;
+  user-select: none;
+  z-index: 4;
+}
+
 // LLM agent change: dialogue frame content fills the card while reserving internal room for speaker and choices.
 .canvas-node.dialogue-canvas-frame-node > .canvas-node-container,
 .canvas-node.dialogue-canvas-frame-node > .canvas-node-container > .canvas-node-content,
@@ -299,8 +321,21 @@
 
 .dialogue-canvas-modal-textarea {
   width: 100%;
-  min-height: 160px;
+  min-height: 120px;
   resize: vertical;
+}
+
+.dialogue-canvas-editor-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+
+  margin-top: 18px;
+}
+
+.dialogue-canvas-editor-section-header h3 {
+  margin: 0;
 }
 
 .dialogue-canvas-choice-editor-row {
@@ -327,7 +362,7 @@
 
 .dialogue-canvas-choice-textarea {
   width: 100%;
-  min-height: 140px;
+  min-height: 72px;
   resize: vertical;
 }
 

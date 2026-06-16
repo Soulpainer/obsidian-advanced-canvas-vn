@@ -477,6 +477,7 @@ export default class DialogueFrameCanvasExtension extends CanvasExtension {
       this.renderNodeBadge(canvas, node, characters)
       this.renderNodeChoices(canvas, node, stats)
       this.renderNodeText(canvas, node)
+      this.renderNodeActionIndicator(canvas, node)
     }
   }
 
@@ -657,6 +658,39 @@ export default class DialogueFrameCanvasExtension extends CanvasExtension {
     textEl.textContent = text
 
     nodeEl.appendChild(textEl)
+  }
+
+  // LLM agent change: frames with side effects get a compact visible action marker on the card.
+  private renderNodeActionIndicator(canvas: Canvas, node: CanvasNode) {
+    const nodeData = node.getData() as CanvasNodeDataWithDialogue
+    const nodeEl = this.getNodeElement(canvas, node)
+
+    if (!nodeEl) {
+      return
+    }
+
+    const actionsCount = nodeData["x-dialogue"]?.frame?.actions?.length ?? 0
+
+    if (actionsCount === 0) {
+      nodeEl.querySelector(":scope > .dialogue-canvas-action-indicator")?.remove()
+      return
+    }
+
+    const indicatorKey = String(actionsCount)
+    const existingIndicator = nodeEl.querySelector(":scope > .dialogue-canvas-action-indicator") as HTMLElement | null
+
+    if (existingIndicator?.dataset.dialogueActionKey === indicatorKey) {
+      return
+    }
+
+    existingIndicator?.remove()
+
+    const indicatorEl = activeDocument.createElement("div")
+    indicatorEl.addClass("dialogue-canvas-action-indicator")
+    indicatorEl.dataset.dialogueActionKey = indicatorKey
+    indicatorEl.textContent = `ACT ${actionsCount}`
+
+    nodeEl.appendChild(indicatorEl)
   }
 
   // LLM agent change: embedded choices are part of the frame node, so node height must reserve their rows.
