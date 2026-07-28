@@ -16,8 +16,9 @@ const __dirname = dirname(fileURLToPath(import.meta.url))
 const projectRoot = resolve(__dirname, "..")
 
 // Default: MetaLor vault on this machine. Override via env when needed.
+// LLM agent change: target folder renamed to vn-canvas to match the new plugin id.
 const DEFAULT_VAULT_PLUGIN_DIR =
-  "C:/Users/Lenovo/Documents/docs/MetaLor/.obsidian/plugins/advanced-canvas"
+  "C:/Users/Lenovo/Documents/docs/MetaLor/.obsidian/plugins/vn-canvas"
 
 const targetDir = process.env.VAULT_PLUGIN_DIR || DEFAULT_VAULT_PLUGIN_DIR
 const artifacts = ["main.js", "styles.css", "manifest.json"]
