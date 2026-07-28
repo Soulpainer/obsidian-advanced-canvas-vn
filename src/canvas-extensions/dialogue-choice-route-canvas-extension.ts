@@ -530,27 +530,17 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
     ) as HTMLElement | null
     const targetEl = portEl ?? anchorEl ?? fallbackEl
 
-    const bbox = sourceNode.getBBox()
-    const nodeHeightCanvas = bbox.maxY - bbox.minY
-
-    // LLM agent change: position the choice anchor from the DOM LAYOUT tree, not from viewport
-    // coordinates. offsetTop / offsetHeight come from the box model and stay correct whether the
-    // node is on-screen, partially clipped, or fully scrolled out of view (verified: a node's
-    // choice-list offsetTop is identical when visible and when fully hidden behind the canvas
-    // edge — Obsidian only visually clips, it does not tear down the DOM). getBoundingClientRect()
-    // instead returned zero / stale boxes once the node left the viewport, which made the choice
-    // edges visibly drift.
-    //
-    // We convert DOM pixel offsets to canvas units by the ratio nodeCanvasHeight / nodeDomHeight,
-    // which absorbs zoom without needing canvas.zoom directly.
-    if (targetEl && nodeEl && nodeEl.offsetHeight > 0) {
-      const absoluteTopPx = this.offsetTopRelativeTo(targetEl, nodeEl)
-      const centerPx = absoluteTopPx + targetEl.offsetHeight / 2
-      const scale = nodeHeightCanvas / nodeEl.offsetHeight
-      return {
-        x: bbox.maxX,
-        y: bbox.minY + centerPx * scale,
-      }
+    // LLM agent change: only trust the DOM rect when it is genuinely usable. Obsidian lazily
+    // renders / clips node content that scrolls outside the viewport, so getBoundingClientRect()
+    // can return zero-size or stale boxes — which made choice edges "drift" when the source node
+    // touched or crossed the canvas edge. When the rect is invalid, fall back to a geometric
+    // anchor computed from the node bbox and the choice-list layout (see getChoiceAnchorGeometric).
+    if (targetEl && this.isDomAnchorUsable(canvas, sourceNode, targetEl)) {
+      const rect = targetEl.getBoundingClientRect()
+      return canvas.posFromClient({
+        x: portEl ? rect.left + rect.width / 2 : rect.right,
+        y: rect.top + rect.height / 2,
+      })
     }
 
     const sourceNodeData = sourceNode.getData() as CanvasNodeDataWithDialogue
@@ -558,19 +548,21 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
     return this.getChoiceAnchorGeometric(sourceNode, choices, choiceId, outcome)
   }
 
-  // LLM agent change: sum offsetTop up the offset chain from `el` to (but not including) `root`.
-  // Used to express a choice port's position relative to its frame node in layout coordinates.
-  private offsetTopRelativeTo(el: HTMLElement, root: HTMLElement): number {
-    let top = 0
-    let current: HTMLElement | null = el
-    while (current && current !== root) {
-      top += current.offsetTop
-      current = current.offsetParent as HTMLElement | null
-      if (current && !root.contains(current)) {
-        break
-      }
+  // LLM agent change: heuristic deciding whether a DOM anchor's bounding rect is trustworthy.
+  // Returns false when the rect is zero-size or when the source node is outside the current
+  // viewport (Obsidian may have un-rendered or clipped its inner DOM in that case).
+  private isDomAnchorUsable(canvas: Canvas, sourceNode: CanvasNode, targetEl: HTMLElement): boolean {
+    const rect = targetEl.getBoundingClientRect()
+    if (rect.width === 0 || rect.height === 0) {
+      return false
     }
-    return top
+
+    const viewport = canvas.getViewportBBox()
+    const nodeBbox = sourceNode.getBBox()
+    // Allow partial overlap; only distrust when the node is entirely off-screen.
+    const horizontallyOff = nodeBbox.maxX < viewport.minX || nodeBbox.minX > viewport.maxX
+    const verticallyOff = nodeBbox.maxY < viewport.minY || nodeBbox.minY > viewport.maxY
+    return !(horizontallyOff || verticallyOff)
   }
 
   // LLM agent change: geometric fallback for getChoiceAnchor. Mirrors the choice-list layout
