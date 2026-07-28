@@ -12,15 +12,13 @@ import {
   DialogueChoiceRouteOutcome,
   DialogueEdgeData,
   DialogueFailureRouteData,
-  DialogueFrameEditorValue,
   DialogueNodeData,
 } from "src/@types/DialogueCanvas"
 import CanvasHelper from "src/utils/canvas-helper"
-import DialogueCharactersLoader from "src/utils/dialogue-characters-loader"
-import DialoguePropertiesLoader from "src/utils/dialogue-properties-loader"
-import DialogueStatsLoader from "src/utils/dialogue-stats-loader"
 import CanvasExtension from "./canvas-extension"
-import EditDialogueFrameModal from "src/modals/edit-dialogue-frame-modal"
+// LLM agent change: removed imports of EditDialogueFrameModal, DialogueFrameEditorValue and the
+// dialogue markdown loaders — they were only used by the deleted openFrameModal()/saveFrame()
+// duplicate, which now routes through the shared dialogue-frame-edit-requested event.
 
 type CanvasNodeDataWithDialogue = ReturnType<CanvasNode["getData"]> & {
   id: string
@@ -251,7 +249,7 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
 
     delete nextXDialogue.answer
 
-    edge.setData({
+    const nextEdgeData: CanvasEdgeDataWithDialogue = {
       ...edgeData,
       color: this.getRouteCanvasColorId(Math.max(choiceIndex, 0)),
       label: "",
@@ -260,7 +258,10 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
         path: route.outcome === "failure" ? "short-dashed" : null,
       },
       "x-dialogue": nextXDialogue,
-    })
+    }
+    // LLM agent change: build the setData payload as CanvasEdgeDataWithDialogue first, so the
+    // `x-dialogue` field (valid for dialogue edges, absent from base CanvasEdgeData) type-checks.
+    edge.setData(nextEdgeData)
     canvas.pushHistory(canvas.getData())
     this.plugin.app.workspace.trigger("advanced-canvas:dialogue-choice-route-changed", canvas, sourceNode)
     this.scheduleRenderCanvas(canvas)
@@ -318,7 +319,7 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
       },
     }
 
-    node.setData({
+    const nextNodeData: CanvasNodeDataWithDialogue = {
       ...nodeData,
       text: "",
       height: Math.max(nodeData.height ?? size.height, 220),
@@ -329,61 +330,19 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
           choices: [],
         },
       },
-    })
+    }
+    node.setData(nextNodeData)
     canvas.importData({ nodes: [], edges: [edgeData] }, false, false)
     canvas.selectOnly(node)
     canvas.pushHistory(canvas.getData())
     this.plugin.app.workspace.trigger("advanced-canvas:dialogue-choice-route-changed", canvas, sourceNode)
     this.scheduleRenderCanvas(canvas)
 
-    await this.openFrameModal(canvas, node)
-  }
-
-  private async openFrameModal(canvas: Canvas, node: CanvasNode) {
-    const nodeData = node.getData() as CanvasNodeDataWithDialogue
-    const frameMeta = nodeData["x-dialogue"]?.frame
-    const [characters, stats, properties] = await Promise.all([
-      DialogueCharactersLoader.loadCharacters(this.plugin.app as any),
-      DialogueStatsLoader.loadStats(this.plugin.app as any),
-      DialoguePropertiesLoader.loadProperties(this.plugin.app as any),
-    ])
-    const initialValue: DialogueFrameEditorValue = {
-      frameId: frameMeta?.frameId ?? this.generateFrameId(nodeData.text ?? nodeData.id),
-      speakerId: frameMeta?.speakerId,
-      text: nodeData.text ?? "",
-      choices: frameMeta?.choices?.map(choice => ({ ...choice })) ?? [],
-    }
-
-    new EditDialogueFrameModal(this.plugin.app as any, {
-      initialValue,
-      characters,
-      stats,
-      properties,
-      onSubmit: value => this.saveFrame(canvas, node, value),
-    }).open()
-  }
-
-  private saveFrame(canvas: Canvas, node: CanvasNode, value: DialogueFrameEditorValue) {
-    const nodeData = node.getData() as CanvasNodeDataWithDialogue
-    const existingFrame = nodeData["x-dialogue"]?.frame
-
-    node.setData({
-      ...nodeData,
-      text: value.text,
-      height: Math.max(nodeData.height ?? 0, this.getMinimumNodeHeightForChoices(value.choices ?? []), 160),
-      "x-dialogue": {
-        ...nodeData["x-dialogue"],
-        frame: {
-          frameId: value.frameId,
-          speakerId: value.speakerId,
-          choices: value.choices ?? [],
-          checks: existingFrame?.checks,
-          conditions: existingFrame?.conditions,
-        },
-      },
-    })
-    canvas.pushHistory(canvas.getData())
-    this.scheduleRenderCanvas(canvas)
+    // LLM agent change: removed the local openFrameModal()/saveFrame() duplicate here.
+    // Opening the frame editor now goes through the single shared event, which is handled by
+    // DialogueFrameCanvasExtension.openEditFrameModal — that path loads triggers AND persists
+    // actions, so editing a freshly created linked frame no longer silently drops them.
+    this.plugin.app.workspace.trigger("advanced-canvas:dialogue-frame-edit-requested", canvas, node)
   }
 
   private scheduleRenderAllCanvases() {
@@ -627,9 +586,11 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
     return resolvedColor || cssColor
   }
 
-  private getRouteCanvasColorId(choiceIndex: number): string {
-    // LLM agent change: keep stored canvas edge colors aligned with the 8 dialogue choice colors.
-    return String(choiceIndex % 8 + 1)
+  private getRouteCanvasColorId(choiceIndex: number): `${number}` {
+    // LLM agent change: return a template-literal-number type (e.g. "1".."8") so the value
+    // satisfies the project's narrow `CanvasColor = \`${number}\` | \`#${string}\`` union
+    // without an `as` cast. Obsidian's stored canvas colors are 1-based palette indices.
+    return String(choiceIndex % 8 + 1) as `${number}`
   }
 
   private getRouteColorCss(choiceIndex: number, outcome: DialogueChoiceRouteOutcome): string {

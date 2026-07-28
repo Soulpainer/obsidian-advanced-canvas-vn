@@ -227,7 +227,6 @@ export default class DialogueFrameCanvasExtension extends CanvasExtension {
   ) {
     const nodeData = node.getData() as CanvasNodeDataWithDialogue
     const adjustedData = this.applySpeakerMinHeight(nodeData, editorValue)
-    const existingFrame = nodeData["x-dialogue"]?.frame
 
     const nextData: CanvasNodeDataWithDialogue = {
       ...nodeData,
@@ -244,8 +243,8 @@ export default class DialogueFrameCanvasExtension extends CanvasExtension {
           speakerId: editorValue.speakerId,
           choices: editorValue.choices ?? [],
           actions: editorValue.actions ?? [],
-          checks: existingFrame?.checks,
-          conditions: existingFrame?.conditions,
+          // LLM agent change: removed legacy `checks`/`conditions` — they are not part of
+          // DialogueFrameData (checks/conditions live on choices, not on the frame itself).
         },
       },
     }
@@ -1011,7 +1010,9 @@ export default class DialogueFrameCanvasExtension extends CanvasExtension {
       return direct
     }
 
-    const allNodes = [...wrapperEl.querySelectorAll(".canvas-node")] as HTMLElement[]
+    // LLM agent change: use Array.from instead of the spread operator — Nodelist's
+    // Symbol.iterator isn't in the TS lib config here, so `[...querySelectorAll]` errored.
+    const allNodes = Array.from(wrapperEl.querySelectorAll(".canvas-node")) as HTMLElement[]
 
     return allNodes.find(element => {
       return (
@@ -1118,21 +1119,25 @@ export default class DialogueFrameCanvasExtension extends CanvasExtension {
 
     const trimmed = value.trim()
 
+    // LLM agent change: use a plain boolean check (not the `isUsableCssColor` type guard)
+    // here, because applying a `value is string` guard to `trimmed` (already `string`) narrows
+    // it to `never` in the branches below, breaking the `.match` calls.
     if (this.isUsableCssColor(trimmed)) {
       return trimmed
     }
 
-    const rgbMatch = trimmed.match(/rgba?\([^)]+\)/i)
+    const rest: string = trimmed
+    const rgbMatch = rest.match(/rgba?\([^)]+\)/i)
     if (rgbMatch) {
       return rgbMatch[0]
     }
 
-    const hslMatch = trimmed.match(/hsla?\([^)]+\)/i)
+    const hslMatch = rest.match(/hsla?\([^)]+\)/i)
     if (hslMatch) {
       return hslMatch[0]
     }
 
-    const hexMatch = trimmed.match(/#[0-9a-f]{3,8}\b/i)
+    const hexMatch = rest.match(/#[0-9a-f]{3,8}\b/i)
     if (hexMatch) {
       return hexMatch[0]
     }

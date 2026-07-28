@@ -224,7 +224,7 @@ export default class DialogueRouterCanvasExtension extends CanvasExtension {
     })
     const nodeData = node.getData() as CanvasNodeDataWithDialogue
 
-    node.setData({
+    const nextData: CanvasNodeDataWithDialogue = {
       ...nodeData,
       text: "",
       width: Math.max(nodeData.width ?? 0, 360),
@@ -236,7 +236,10 @@ export default class DialogueRouterCanvasExtension extends CanvasExtension {
           choices: [],
         },
       },
-    })
+    }
+    // LLM agent change: build the setData payload as a CanvasNodeDataWithDialogue first, so
+    // the `text` field (valid on text nodes but absent from the base CanvasNodeData) type-checks.
+    node.setData(nextData)
     canvas.selectOnly(node)
     canvas.pushHistory(canvas.getData())
     this.plugin.app.workspace.trigger("advanced-canvas:dialogue-frame-edit-requested", canvas, node)
@@ -256,7 +259,7 @@ export default class DialogueRouterCanvasExtension extends CanvasExtension {
     })
     const nodeData = node.getData() as CanvasNodeDataWithDialogue
 
-    node.setData({
+    const nextData: CanvasNodeDataWithDialogue = {
       ...nodeData,
       text: "",
       width: this.routerSize,
@@ -267,7 +270,9 @@ export default class DialogueRouterCanvasExtension extends CanvasExtension {
           type: "point",
         },
       },
-    })
+    }
+    // LLM agent change: see createFrameNode — typed payload so `text` type-checks.
+    node.setData(nextData)
     canvas.selectOnly(node)
     canvas.pushHistory(canvas.getData())
     this.renderRouterNode(canvas, node)

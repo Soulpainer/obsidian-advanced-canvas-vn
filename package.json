@@ -4,6 +4,7 @@
     "postinstall": "patch-package",
     "dev": "node esbuild.config.mjs",
     "build": "node esbuild.config.mjs production",
+    "deploy": "node scripts/deploy.mjs",
     "lint": "eslint src/ --ext .ts,.tsx"
   },
   "devDependencies": {
