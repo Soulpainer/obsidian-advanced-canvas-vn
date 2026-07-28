@@ -132,7 +132,10 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
   private readonly minFrameContentHeight = 120
   private readonly choicesTopGap = 12
   private readonly choiceRowHeight = 30
-  private readonly choiceFailureRowHeight = 24
+  // LLM agent change: real failure sub-block height per CSS = margin-top(3) + min-height(20) +
+  // vertical padding(4+4) = 31px. Was 24, which under-counted by 7px and made geometric anchors
+  // (and node-height math) drift relative to the rendered DOM.
+  private readonly choiceFailureRowHeight = 31
   private readonly choicesBottomPadding = 12
   // LLM agent change: these Maps are declared WITHOUT initializers and created in init().
   // Reason: the CanvasExtension base constructor calls this.init() from within super(), which

@@ -50,7 +50,9 @@ export default class DialogueFrameCanvasExtension extends CanvasExtension {
   private readonly minFrameContentHeight = 120
   private readonly choicesTopGap = 12
   private readonly choiceRowHeight = 30
-  private readonly choiceFailureRowHeight = 24
+  // LLM agent change: real failure sub-block height per CSS = margin-top(3) + min-height(20) +
+  // vertical padding(4+4) = 31px. Was 24; kept in sync with DialogueChoiceRouteCanvasExtension.
+  private readonly choiceFailureRowHeight = 31
   private readonly choicesBottomPadding = 12
   private readonly minDialogueNodeWidth = 280
 
