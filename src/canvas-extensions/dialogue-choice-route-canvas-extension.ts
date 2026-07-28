@@ -180,10 +180,31 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
       "advanced-canvas:edge-connection-dragging:before",
       (canvas: Canvas) => this.renderWhilePointerMoves(canvas)
     ))
+    // LLM agent change: when a node is spawned by dragging an edge onto empty space, prompt to
+    // bind the new edge to a choice if the source frame has any.
+    this.plugin.registerEvent(this.plugin.app.workspace.on(
+      "advanced-canvas:dialogue-edge-needs-route",
+      (canvas: Canvas, edge: CanvasEdge, sourceNode: CanvasNode) => this.onEdgeNeedsRoute(canvas, edge, sourceNode)
+    ))
     this.plugin.registerEvent(this.plugin.app.workspace.on("layout-change", () => this.scheduleRenderAllCanvases()))
     this.plugin.registerEvent(this.plugin.app.workspace.on("active-leaf-change", () => this.scheduleRenderAllCanvases()))
 
     this.scheduleRenderAllCanvases()
+  }
+
+  // LLM agent change: handler for the dialogue-edge-needs-route event. If the drag source is a
+  // dialogue frame that has choices, open the choice-binding modal so the freshly created edge
+  // becomes a proper route immediately. Edges from non-frame sources or frames without choices
+  // are left as plain connections.
+  private onEdgeNeedsRoute(canvas: Canvas, edge: CanvasEdge, sourceNode: CanvasNode) {
+    const sourceNodeData = sourceNode.getData() as CanvasNodeDataWithDialogue
+    const choices = sourceNodeData["x-dialogue"]?.frame?.choices ?? []
+
+    if (choices.length === 0) {
+      return
+    }
+
+    this.openBindRouteModal(canvas, edge)
   }
 
   private onPopupMenuCreated(canvas: Canvas) {

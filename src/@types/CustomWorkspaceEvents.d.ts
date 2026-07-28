@@ -56,6 +56,13 @@ export interface CustomWorkspaceEvents {
   'advanced-canvas:dialogue-choice-route-changed': (canvas: Canvas, sourceNode: CanvasNode) => void
   /** Fired when native inline edit should be replaced by dialogue frame modal editing */
   'advanced-canvas:dialogue-frame-edit-requested': (canvas: Canvas, node: CanvasNode) => void
+  /**
+   * LLM agent change: Fired after a node is spawned by dragging an edge onto empty canvas space.
+   * The choice-route extension listens for it and, if the source node is a frame with choices,
+   * opens the choice-binding modal for the new edge. Args: the edge that was just wired to the
+   * spawned node, and the source node the drag started from.
+   */
+  'advanced-canvas:dialogue-edge-needs-route': (canvas: Canvas, edge: CanvasEdge, sourceNode: CanvasNode) => void
   /** Fired when the text content of a node gets changed (While typing) */
   'advanced-canvas:node-text-content-changed': (canvas: Canvas, node: CanvasNode, viewUpdate: any) => void
   /** Fired before an existing edge tries to get dragged */

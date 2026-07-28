@@ -1,8 +1,9 @@
 /* eslint-disable @typescript-eslint/no-explicit-any -- LLM agent change: Obsidian Canvas internals are partially untyped. */
 /* eslint-disable @typescript-eslint/no-unsafe-assignment -- LLM agent change: Obsidian Canvas internals are partially untyped. */
 /* eslint-disable @typescript-eslint/no-unsafe-member-access -- LLM agent change: Obsidian Canvas internals are partially untyped. */
-import { Notice } from "obsidian"
+import { Menu, Notice } from "obsidian"
 import { Canvas, CanvasEdge, CanvasNode, Position } from "src/@types/Canvas"
+import { Side } from "src/@types/AdvancedJsonCanvas"
 import { DialogueNodeData } from "src/@types/DialogueCanvas"
 import CanvasHelper from "src/utils/canvas-helper"
 import CanvasExtension from "./canvas-extension"
@@ -91,6 +92,13 @@ export default class DialogueRouterCanvasExtension extends CanvasExtension {
     this.plugin.registerEvent(this.plugin.app.workspace.on(
       "advanced-canvas:edge-removed",
       (canvas: Canvas) => this.onSelectionChanged(canvas)
+    ))
+
+    // LLM agent change: drag a new edge onto empty canvas space to spawn a dialogue node there.
+    this.plugin.registerEvent(this.plugin.app.workspace.on(
+      "advanced-canvas:edge-connection-dragging:after",
+      (canvas: Canvas, edge: CanvasEdge, event: PointerEvent, newEdge: boolean, side: "from" | "to") =>
+        this.onEdgeConnectionDrop(canvas, edge, event, newEdge, side)
     ))
 
     this.plugin.registerEvent(this.plugin.app.workspace.on(
@@ -282,6 +290,174 @@ export default class DialogueRouterCanvasExtension extends CanvasExtension {
     canvas.selectOnly(node)
     canvas.pushHistory(canvas.getData())
     this.renderRouterNode(canvas, node)
+  }
+
+  // LLM agent change: when the user drags a brand-new edge from a node and releases it on empty
+  // canvas space, offer to spawn a dialogue frame or a route point at the drop location and wire
+  // the edge to it. If the source node is a frame with choices, the choice-route extension will
+  // additionally prompt to bind the new edge to a choice (handled via the dialogue-edge-needs-route
+  // event, see DialogueChoiceRouteCanvasExtension).
+  private onEdgeConnectionDrop(
+    canvas: Canvas,
+    edge: CanvasEdge,
+    event: PointerEvent,
+    newEdge: boolean,
+    side: "from" | "to"
+  ) {
+    // Only handle freshly created edges dragged by their target end onto empty space.
+    if (!newEdge || side !== "to") {
+      return
+    }
+
+    // Grab the source synchronously, before Obsidian discards the dangling edge.
+    const sourceNode = edge.from?.node
+    if (!sourceNode || canvas.readonly) {
+      return
+    }
+
+    const dropPosition = canvas.posFromEvt(event)
+
+    // If the drop landed on an existing node, let Obsidian wire it natively.
+    if (this.isPointOverNode(canvas, dropPosition)) {
+      return
+    }
+
+    const screenX = event.clientX
+    const screenY = event.clientY
+    const sourceNodeId = sourceNode.getData().id
+
+    new Menu()
+      .addItem(item => {
+        item
+          .setTitle("Add dialogue frame")
+          .setIcon("message-square-plus")
+          .onClick(() => this.spawnNodeAtDrop(canvas, sourceNodeId, dropPosition, "frame"))
+      })
+      .addItem(item => {
+        item
+          .setTitle("Add dialogue route point")
+          .setIcon("circle-dot")
+          .onClick(() => this.spawnNodeAtDrop(canvas, sourceNodeId, dropPosition, "router"))
+      })
+      .showAtPosition({ x: screenX, y: screenY })
+  }
+
+  // LLM agent change: create a frame or router node centered at the drop position, then wire an
+  // edge from the source node to it. After wiring, emit dialogue-edge-needs-route so the
+  // choice-route extension can prompt for a choice binding (frame source with choices) and open
+  // the frame editor for frames.
+  private spawnNodeAtDrop(
+    canvas: Canvas,
+    sourceNodeId: string,
+    dropPosition: Position,
+    kind: "frame" | "router"
+  ) {
+    const sourceNode = canvas.nodes.get(sourceNodeId)
+    if (!sourceNode) {
+      return
+    }
+
+    // Build the node centered on the drop position.
+    const size = kind === "frame"
+      ? { width: 360, height: 220 }
+      : { width: this.routerSize, height: this.routerSize }
+
+    const node = canvas.createTextNode({
+      pos: {
+        x: dropPosition.x - size.width / 2,
+        y: dropPosition.y - size.height / 2,
+      },
+      size,
+    })
+    const nodeData = node.getData() as CanvasNodeDataWithDialogue
+
+    const nextNodeData: CanvasNodeDataWithDialogue = kind === "frame"
+      ? {
+          ...nodeData,
+          text: "",
+          width: size.width,
+          height: size.height,
+          "x-dialogue": {
+            ...nodeData["x-dialogue"],
+            frame: {
+              frameId: this.generateFrameId(nodeData.id),
+              choices: [],
+            },
+          },
+        }
+      : {
+          ...nodeData,
+          text: "",
+          width: this.routerSize,
+          height: this.routerSize,
+          "x-dialogue": {
+            ...nodeData["x-dialogue"],
+            router: { type: "point" },
+          },
+        }
+    node.setData(nextNodeData)
+
+    // Wire the edge from source to the new node. Use the simplest side heuristic: out of the
+    // source's right side into the new node's left side. The choice-route extension re-renders
+    // edges so any route styling gets applied once a choice is bound.
+    const edgeData: CanvasEdgeDataWithNodes = {
+      id: `${sourceNodeId}-to-${node.getData().id}`,
+      fromNode: sourceNodeId,
+      fromSide: "right" as Side,
+      toNode: node.getData().id,
+      toSide: "left" as Side,
+    }
+    canvas.importData({ nodes: [], edges: [edgeData] }, false, false)
+
+    canvas.selectOnly(node)
+    canvas.pushHistory(canvas.getData())
+
+    // Give the choice-route extension a chance to prompt for a choice binding.
+    const createdEdge = canvas.getEdgesForNode(sourceNode).find(candidate => {
+      const data = candidate.getData() as CanvasEdgeDataWithNodes
+      return data.toNode === node.getData().id && data.fromNode === sourceNodeId
+    })
+    if (createdEdge) {
+      this.plugin.app.workspace.trigger(
+        "advanced-canvas:dialogue-edge-needs-route",
+        canvas,
+        createdEdge,
+        sourceNode
+      )
+    }
+
+    // For frames, open the editor (mirrors createDialogueFrameNode). Routers render via the
+    // node-added/node-changed listeners.
+    if (kind === "frame") {
+      this.plugin.app.workspace.trigger("advanced-canvas:dialogue-frame-edit-requested", canvas, node)
+    } else {
+      this.renderRouterNode(canvas, node)
+    }
+  }
+
+  // LLM agent change: returns true if a canvas-space point lies inside any existing node's bbox.
+  // Used to decide whether a dragged-edge drop hit empty space (offer the spawn menu) or a node
+  // (let Obsidian handle it natively).
+  private isPointOverNode(canvas: Canvas, point: Position): boolean {
+    for (const node of canvas.nodes.values()) {
+      const data = node.getData()
+      const x = data.x
+      const y = data.y
+      const width = data.width
+      const height = data.height
+      if (x === undefined || y === undefined || width === undefined || height === undefined) {
+        continue
+      }
+      if (
+        point.x >= x &&
+        point.x <= x + width &&
+        point.y >= y &&
+        point.y <= y + height
+      ) {
+        return true
+      }
+    }
+    return false
   }
 
   private enforceSingleOutgoingEdge(canvas: Canvas, edge: CanvasEdge) {
