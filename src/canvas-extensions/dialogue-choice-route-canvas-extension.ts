@@ -530,7 +530,12 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
     ) as HTMLElement | null
     const targetEl = portEl ?? anchorEl ?? fallbackEl
 
-    if (targetEl) {
+    // LLM agent change: only trust the DOM rect when it is genuinely usable. Obsidian lazily
+    // renders / clips node content that scrolls outside the viewport, so getBoundingClientRect()
+    // can return zero-size or stale boxes — which made choice edges "drift" when the source node
+    // touched or crossed the canvas edge. When the rect is invalid, fall back to a geometric
+    // anchor computed from the node bbox and the choice-list layout (see getChoiceAnchorGeometric).
+    if (targetEl && this.isDomAnchorUsable(canvas, sourceNode, targetEl)) {
       const rect = targetEl.getBoundingClientRect()
       return canvas.posFromClient({
         x: portEl ? rect.left + rect.width / 2 : rect.right,
@@ -538,10 +543,91 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
       })
     }
 
+    const sourceNodeData = sourceNode.getData() as CanvasNodeDataWithDialogue
+    const choices = sourceNodeData["x-dialogue"]?.frame?.choices ?? []
+    return this.getChoiceAnchorGeometric(sourceNode, choices, choiceId, outcome)
+  }
+
+  // LLM agent change: heuristic deciding whether a DOM anchor's bounding rect is trustworthy.
+  // Returns false when the rect is zero-size or when the source node is outside the current
+  // viewport (Obsidian may have un-rendered or clipped its inner DOM in that case).
+  private isDomAnchorUsable(canvas: Canvas, sourceNode: CanvasNode, targetEl: HTMLElement): boolean {
+    const rect = targetEl.getBoundingClientRect()
+    if (rect.width === 0 || rect.height === 0) {
+      return false
+    }
+
+    const viewport = canvas.getViewportBBox()
+    const nodeBbox = sourceNode.getBBox()
+    // Allow partial overlap; only distrust when the node is entirely off-screen.
+    const horizontallyOff = nodeBbox.maxX < viewport.minX || nodeBbox.minX > viewport.maxX
+    const verticallyOff = nodeBbox.maxY < viewport.minY || nodeBbox.minY > viewport.maxY
+    return !(horizontallyOff || verticallyOff)
+  }
+
+  // LLM agent change: geometric fallback for getChoiceAnchor. Mirrors the choice-list layout
+  // (see DialogueFrameCanvasExtension.renderChoices and the .dialogue-canvas-choice-list CSS):
+  // the list is anchored to the bottom of the node (8px padding) and stacks choice rows from
+  // the top, each row being choiceRowHeight tall with an extra choiceFailureRowHeight block for
+  // choices that have checks/conditions. Success port sits at the row's vertical center on the
+  // node's right edge; failure port sits in the failure sub-block below it.
+  private getChoiceAnchorGeometric(
+    sourceNode: CanvasNode,
+    choices: DialogueChoiceData[],
+    choiceId: string,
+    outcome: DialogueChoiceRouteOutcome
+  ): Position {
     const bbox = sourceNode.getBBox()
+    const nodeRightX = bbox.maxX
+
+    const listBottomPadding = 8
+    const listGap = 4
+
+    // Stack choices from the top of the list to find this choice's row top offset.
+    let rowTopOffset = 0
+    let found = false
+    for (let index = 0; index < choices.length; index++) {
+      const choice = choices[index]
+      if (!choice) {
+        continue
+      }
+      if (index > 0) {
+        rowTopOffset += listGap
+      }
+      if (choice.choiceId === choiceId) {
+        found = true
+        break
+      }
+      rowTopOffset += this.choiceRowHeight
+      if (this.choiceHasFailureSlot(choice)) {
+        rowTopOffset += this.choiceFailureRowHeight
+      }
+    }
+
+    if (!found) {
+      // Unknown choice — anchor at the right-center of the node as a safe default.
+      return { x: nodeRightX, y: (bbox.minY + bbox.maxY) / 2 }
+    }
+
+    // The list's total height, used to compute its top Y from the node's bottom.
+    const listHeight = choices.reduce((total, choice, index) => {
+      const gap = index === 0 ? 0 : listGap
+      return total + gap + this.choiceRowHeight + (this.choiceHasFailureSlot(choice) ? this.choiceFailureRowHeight : 0)
+    }, 0)
+
+    const listTopY = bbox.maxY - listBottomPadding - listHeight
+
+    // Within the row: success port at row center; failure port in the sub-block below the row.
+    let yOffsetInRow: number
+    if (outcome === "failure") {
+      yOffsetInRow = this.choiceRowHeight + this.choiceFailureRowHeight / 2
+    } else {
+      yOffsetInRow = this.choiceRowHeight / 2
+    }
+
     return {
-      x: bbox.maxX,
-      y: (bbox.minY + bbox.maxY) / 2,
+      x: nodeRightX,
+      y: listTopY + rowTopOffset + yOffsetInRow,
     }
   }
 
