@@ -1,4 +1,4 @@
-import { ItemView, Plugin, requireApiVersion } from 'obsidian'
+import { ItemView, Plugin } from 'obsidian'
 import { Canvas, CanvasView } from './@types/Canvas'
 
 // Utils
@@ -12,15 +12,6 @@ import WindowsManager from './managers/windows-manager'
 // Patchers
 import Patcher from './patchers/patcher'
 import CanvasPatcher from './patchers/canvas-patcher'
-import LinkSuggestionsPatcher from './patchers/link-suggestions-patcher'
-import EmbedPatcher from './patchers/embed-patcher'
-import MetadataCachePatcher from './patchers/metadata-cache-patcher'
-import BacklinksPatcher from './patchers/backlinks-patcher'
-import OutgoingLinksPatcher from './patchers/outgoing-links-patcher'
-import FileManagerPatcher from './patchers/file-manager-patcher'
-import PropertiesPatcher from './patchers/properties-patcher'
-import SearchPatcher from './patchers/search-patcher'
-import SearchCommandPatcher from './patchers/search-command-patcher'
 
 // Canvas Extensions
 import CanvasExtension from './canvas-extensions/canvas-extension'
@@ -31,41 +22,23 @@ import DialogueRouterCanvasExtension from './canvas-extensions/dialogue-router-c
 
 // Dataset Exposers
 import CanvasMetadataExposerExtension from './canvas-extensions/dataset-exposers/canvas-metadata-exposer'
-import NodeInteractionExposerExtension from './canvas-extensions/dataset-exposers/node-interaction-exposer'
-import NodeExposerExtension from './canvas-extensions/dataset-exposers/node-exposer'
-import EdgeExposerExtension from './canvas-extensions/dataset-exposers/edge-exposer'
-import CanvasWrapperExposerExtension from './canvas-extensions/dataset-exposers/canvas-wrapper-exposer'
-import BasesTableViewPatcher from './patchers/bases-table-view-patcher'
 
+// LLM agent change: trimmed PATCHERS to only what the dialogue system needs. The canvas patcher
+// monkey-patches Obsidian's Canvas internals and emits all `advanced-canvas:*` workspace events
+// that the dialogue extensions listen to. The upstream metadata/search/embed/link patchers were
+// removed — they power upstream features (graph view integration, search, backlinks) that this
+// fork no longer ships.
 const PATCHERS = [
-  // Core canvas patchers
   CanvasPatcher,
-  SearchCommandPatcher,
-
-  // Core metadata patchers
-  MetadataCachePatcher,
-  FileManagerPatcher,
-
-  // Direct metadata dependant patchers
-  PropertiesPatcher,
-  (!requireApiVersion("1.12.0") && BacklinksPatcher),
-  OutgoingLinksPatcher,
-
-  // Metadata dependant patchers
-  (requireApiVersion("1.9.0") && BasesTableViewPatcher),
-  LinkSuggestionsPatcher,
-  EmbedPatcher,
-  SearchPatcher,
 ]
 
+// LLM agent change: trimmed CANVAS_EXTENSIONS to the dialogue system plus the minimal canvas
+// metadata infrastructure it depends on (MetadataCanvasExtension proxies canvas.metadata for
+// start/end node markers; CanvasMetadataExposerExtension exposes them as dataset attributes).
+// The upstream feature extensions and the extra dataset exposers were removed.
 const CANVAS_EXTENSIONS: typeof CanvasExtension[] = [
-  // LLM agent change: this fork keeps only quiet canvas infrastructure plus the dialogue system UI.
   MetadataCanvasExtension,
   CanvasMetadataExposerExtension,
-  CanvasWrapperExposerExtension,
-  NodeExposerExtension,
-  EdgeExposerExtension,
-  NodeInteractionExposerExtension,
   DialogueFrameCanvasExtension,
   DialogueRouterCanvasExtension,
   DialogueChoiceRouteCanvasExtension

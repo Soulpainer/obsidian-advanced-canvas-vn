@@ -1,17 +1,7 @@
-@use "styles/settings";
-@use "styles/search-command";
-@use "styles/menu";
-@use "styles/node-styles";
-@use "styles/edge-styles";
-@use "styles/export";
-@use "styles/better-default-settings";
-@use "styles/better-readonly";
-@use "styles/collapsible-groups";
-@use "styles/floating-edge";
-@use "styles/focus-mode";
-@use "styles/presentation";
-@use "styles/portals";
-@use "styles/embeds";
+// LLM agent change: removed the 13 upstream `@use` imports (settings, search-command, menu,
+// node-styles, edge-styles, export, better-default-settings, better-readonly, collapsible-groups,
+// floating-edge, focus-mode, presentation, portals, embeds) — all of those features were cut from
+// this fork. Only the dialogue styles below remain.
 
 // LLM agent change: dialogue choices use an 8-color palette independent from success/failure outcome.
 :root {
