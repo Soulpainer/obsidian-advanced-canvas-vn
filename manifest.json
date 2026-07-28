@@ -1,11 +1,10 @@
 {
-  "id": "advanced-canvas",
-  "name": "Advanced Canvas",
-  "version": "6.2.0",
+  "id": "vn-canvas",
+  "name": "VN Canvas",
+  "version": "0.1.0",
   "minAppVersion": "1.7.2",
-  "description": "Supercharge your canvas experience! Create presentations, flowcharts and more!",
-  "author": "Developer-Mike",
-  "authorUrl": "https://github.com/Developer-Mike",
-  "fundingUrl": "https://ko-fi.com/X8X27IA08",
+  "description": "Visual novel dialogue graph editor for Obsidian Canvas. Authors branching dialogue (frames, choices, stat checks, actions) that a Unity runtime reads as game data.",
+  "author": "MetaLor",
+  "authorUrl": "https://github.com/Developer-Mike/obsidian-advanced-canvas",
   "isDesktopOnly": false
 }
