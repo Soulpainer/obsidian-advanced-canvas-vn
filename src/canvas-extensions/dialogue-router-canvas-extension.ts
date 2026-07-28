@@ -315,6 +315,12 @@ export default class DialogueRouterCanvasExtension extends CanvasExtension {
       return
     }
 
+    // LLM agent change: only offer the spawn menu when the drag started from a dialogue node
+    // (frame or route point). Native nodes keep Obsidian's default edge-drag behavior.
+    if (!this.isDialogueNode(sourceNode)) {
+      return
+    }
+
     const dropPosition = canvas.posFromEvt(event)
 
     // If the drop landed on an existing node, let Obsidian wire it natively.
@@ -326,20 +332,26 @@ export default class DialogueRouterCanvasExtension extends CanvasExtension {
     const screenY = event.clientY
     const sourceNodeId = sourceNode.getData().id
 
-    new Menu()
-      .addItem(item => {
-        item
-          .setTitle("Add dialogue frame")
-          .setIcon("message-square-plus")
-          .onClick(() => this.spawnNodeAtDrop(canvas, sourceNodeId, dropPosition, "frame"))
-      })
-      .addItem(item => {
-        item
-          .setTitle("Add dialogue route point")
-          .setIcon("circle-dot")
-          .onClick(() => this.spawnNodeAtDrop(canvas, sourceNodeId, dropPosition, "router"))
-      })
-      .showAtPosition({ x: screenX, y: screenY })
+    // LLM agent change: defer the menu to the next tick. Showing it synchronously inside the
+    // pointerup handler lets the rest of Obsidian's drag-finalization (which can emit a stray
+    // click / close-overlays call) dismiss the menu instantly. A 0ms timeout yields first so the
+    // menu survives.
+    window.setTimeout(() => {
+      new Menu()
+        .addItem(item => {
+          item
+            .setTitle("Add dialogue frame")
+            .setIcon("message-square-plus")
+            .onClick(() => this.spawnNodeAtDrop(canvas, sourceNodeId, dropPosition, "frame"))
+        })
+        .addItem(item => {
+          item
+            .setTitle("Add dialogue route point")
+            .setIcon("circle-dot")
+            .onClick(() => this.spawnNodeAtDrop(canvas, sourceNodeId, dropPosition, "router"))
+        })
+        .showAtPosition({ x: screenX, y: screenY })
+    }, 0)
   }
 
   // LLM agent change: create a frame or router node centered at the drop position, then wire an
@@ -618,6 +630,14 @@ export default class DialogueRouterCanvasExtension extends CanvasExtension {
   private isRouterNode(node: CanvasNode): boolean {
     const nodeData = node.getData() as CanvasNodeDataWithDialogue
     return nodeData["x-dialogue"]?.router?.type === "point"
+  }
+
+  // LLM agent change: true for dialogue frames and route points — the only nodes the drag-to-spawn
+  // menu should be offered from. Plain text/file/group nodes are left to Obsidian's native behavior.
+  private isDialogueNode(node: CanvasNode): boolean {
+    const nodeData = node.getData() as CanvasNodeDataWithDialogue
+    const dialogue = nodeData["x-dialogue"]
+    return !!dialogue?.frame || !!dialogue?.router
   }
 
   private getMenuPosition(canvas: Canvas): Position {
