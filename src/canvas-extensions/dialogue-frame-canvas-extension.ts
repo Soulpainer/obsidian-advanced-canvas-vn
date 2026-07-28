@@ -36,8 +36,13 @@ type CanvasEdgeDataWithDialogue = {
 
 export default class DialogueFrameCanvasExtension extends CanvasExtension {
   private renderQueued = false
-  private readonly renderFrames = new WeakMap<Canvas, number>()
-  private readonly editModalOpenNodes = new WeakSet<CanvasNode>()
+  // LLM agent change: Map/Set fields declared without initializers and created at the top of
+  // init(). The base CanvasExtension constructor calls init() from within super(), which runs
+  // BEFORE TypeScript field initializers (those execute after super() returns), so initializing
+  // these inline left them undefined when init() ran scheduleRenderAllCanvases(). See
+  // DialogueChoiceRouteCanvasExtension for the same fix and fuller explanation.
+  private renderFrames!: WeakMap<Canvas, number>
+  private editModalOpenNodes!: WeakSet<CanvasNode>
 
   // Минимальная высота карточки, если у неё есть speaker.
   // Подгони под свой шаг сетки.
@@ -49,13 +54,19 @@ export default class DialogueFrameCanvasExtension extends CanvasExtension {
   private readonly choicesBottomPadding = 12
   private readonly minDialogueNodeWidth = 280
 
-  private readonly observedCanvasWrappers = new WeakSet<HTMLElement>()
+  private observedCanvasWrappers!: WeakSet<HTMLElement>
 
   isEnabled() {
     return true
   }
 
   init() {
+    // LLM agent change: initialize Map/Set fields first, before any event handler can fire
+    // (see the field declarations above for why this ordering matters).
+    this.renderFrames = new WeakMap<Canvas, number>()
+    this.editModalOpenNodes = new WeakSet<CanvasNode>()
+    this.observedCanvasWrappers = new WeakSet<HTMLElement>()
+
     console.log("[Dialogue Canvas] DialogueFrameCanvasExtension init")
 
     this.plugin.registerEvent(

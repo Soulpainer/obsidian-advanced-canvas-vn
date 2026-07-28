@@ -134,8 +134,13 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
   private readonly choiceRowHeight = 30
   private readonly choiceFailureRowHeight = 24
   private readonly choicesBottomPadding = 12
-  private readonly renderFrames = new WeakMap<Canvas, number>()
-  private readonly activePointerRenderStops = new WeakMap<Canvas, () => void>()
+  // LLM agent change: these Maps are declared WITHOUT initializers and created in init().
+  // Reason: the CanvasExtension base constructor calls this.init() from within super(), which
+  // runs BEFORE TypeScript field initializers (those execute after super() returns). Initializing
+  // them inline left them undefined when init() ran scheduleRenderAllCanvases(), crashing on
+  // renderFrames.has(). Creating them at the top of init() is the safe ordering.
+  private renderFrames!: WeakMap<Canvas, number>
+  private activePointerRenderStops!: WeakMap<Canvas, () => void>
 
   // LLM agent change: route edges bind to numbered choices stored inside frame nodes.
   isEnabled() {
@@ -143,6 +148,11 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
   }
 
   init() {
+    // LLM agent change: initialize Map fields first, before any event handler can fire
+    // (see the field declaration comment above for why this ordering matters).
+    this.renderFrames = new WeakMap<Canvas, number>()
+    this.activePointerRenderStops = new WeakMap<Canvas, () => void>()
+
     this.plugin.registerEvent(this.plugin.app.workspace.on(
       "advanced-canvas:popup-menu-created",
       (canvas: Canvas) => this.onPopupMenuCreated(canvas)

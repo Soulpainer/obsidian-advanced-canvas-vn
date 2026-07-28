@@ -23,7 +23,10 @@ type CanvasEdgeDataWithNodes = ReturnType<CanvasEdge["getData"]> & {
 
 export default class DialogueRouterCanvasExtension extends CanvasExtension {
   private readonly routerSize = 28
-  private readonly observedCanvasWrappers = new WeakSet<HTMLElement>()
+  // LLM agent change: declared without initializer, created at the top of init(). The base
+  // constructor calls init() from super() before TS field initializers run. See
+  // DialogueChoiceRouteCanvasExtension for the fuller explanation.
+  private observedCanvasWrappers!: WeakSet<HTMLElement>
   private menuObserver: MutationObserver | null = null
   private lastContextMenuRequest: { canvas: Canvas, position: Position } | null = null
   private lastInteractionNode: CanvasNode | null = null
@@ -33,6 +36,9 @@ export default class DialogueRouterCanvasExtension extends CanvasExtension {
   }
 
   init() {
+    // LLM agent change: initialize Map/Set fields first (see declaration comment).
+    this.observedCanvasWrappers = new WeakSet<HTMLElement>()
+
     this.plugin.registerEvent(this.plugin.app.workspace.on(
       "advanced-canvas:canvas-changed",
       (canvas: Canvas) => this.ensureCanvasContextMenu(canvas)
