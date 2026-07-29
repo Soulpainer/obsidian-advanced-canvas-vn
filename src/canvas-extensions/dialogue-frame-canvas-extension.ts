@@ -550,25 +550,23 @@ export default class DialogueFrameCanvasExtension extends CanvasExtension {
     wrapperEl.addEventListener("click", suppressInlineEdit, true)
 
     const observer = new MutationObserver(mutations => {
+      // LLM agent change: with the observer narrowed to direct childList only (no subtree, no
+      // attributes), mutations here mean canvas-level nodes/edges were added or removed. We still
+      // skip mutations caused by our own dialogue overlays (which live inside canvas-node subtrees
+      // and won't appear as direct wrapperEl children, so this is mostly defensive) and schedule a
+      // render otherwise.
       const hasRelevantMutation = mutations.some(mutation => {
-        const target = mutation.target
-
-        if (!(target instanceof HTMLElement)) {
-          return false
+        for (const node of Array.from(mutation.addedNodes)) {
+          if (node instanceof HTMLElement && (node.classList.contains("canvas-node") || node.classList.contains("canvas-edges"))) {
+            return true
+          }
         }
-
-        // Игнорируем собственные изменения бейджа, чтобы не гонять цикл.
-        if (
-          target.closest(".dialogue-canvas-character-header") ||
-          target.closest(".dialogue-canvas-choice-list")
-        ) {
-          return false
+        for (const node of Array.from(mutation.removedNodes)) {
+          if (node instanceof HTMLElement && (node.classList.contains("canvas-node") || node.classList.contains("canvas-edges"))) {
+            return true
+          }
         }
-
-        return (
-          target.classList.contains("canvas-node") ||
-          target.closest(".canvas-node") !== null
-        )
+        return false
       })
 
       if (hasRelevantMutation) {
@@ -576,11 +574,13 @@ export default class DialogueFrameCanvasExtension extends CanvasExtension {
       }
     })
 
+    // LLM agent change: childList only, no subtree / no attributes. Previously observed
+    // wrapperEl with subtree+attributes(class,style), which fired the callback on every hover,
+    // selection, drag and style change of any node — a major idle-CPU source. Canvas-level nodes
+    // and edges are added/removed as direct children of wrapperEl, so childList alone catches the
+    // structural changes we care about.
     observer.observe(wrapperEl, {
       childList: true,
-      subtree: true,
-      attributes: true,
-      attributeFilter: ["class", "style"],
     })
 
     this.plugin.register(() => {

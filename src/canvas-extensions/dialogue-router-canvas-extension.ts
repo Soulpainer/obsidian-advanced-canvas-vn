@@ -151,10 +151,13 @@ export default class DialogueRouterCanvasExtension extends CanvasExtension {
       return
     }
 
+    // LLM agent change: observe only direct childList on body, NOT subtree. Obsidian mounts the
+    // context menu (.menu) as a direct child of body, so we still detect when it opens — but we
+    // no longer fire the callback on every DOM change anywhere in the app (tooltips, hovers,
+    // typing, animations), which was the main source of constant CPU usage while idle.
     this.menuObserver = new MutationObserver(() => this.injectRouterMenuItem())
     this.menuObserver.observe(activeDocument.body, {
       childList: true,
-      subtree: true,
     })
 
     this.plugin.register(() => {
