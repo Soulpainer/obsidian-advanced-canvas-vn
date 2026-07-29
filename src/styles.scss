@@ -397,7 +397,7 @@
   padding: 4px 18px 4px 10px;
 
   display: grid;
-  grid-template-columns: 8px minmax(0, 1fr) auto;
+  grid-template-columns: 14px minmax(0, 1fr) auto;
   gap: 6px;
   align-items: center;
 
@@ -409,12 +409,26 @@
   line-height: 1.25;
 }
 
+// LLM agent change: success port is always visible and interactive (drag from it to create a
+// route bound to this choice). Was an 8px swatch in-flow; now a proper circular port. Stays in
+// the row's first grid column, so the text/meta columns keep their layout.
 .dialogue-canvas-choice-swatch {
-  width: 8px;
-  height: 8px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 2px solid var(--background-primary);
   background: var(--dialogue-choice-success-color, var(--interactive-accent));
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.25);
+  transition: transform 0.1s ease;
 }
 
+.dialogue-canvas-choice-swatch:hover {
+  transform: scale(1.2);
+}
+
+// LLM agent change: a bound route port sits on the node's right edge (the route edge anchors
+// there). Keep that positioning for ports that already have an edge, on top of the always-on
+// in-flow port above.
 .dialogue-canvas-choice-route-port {
   position: absolute;
   right: -7px;
@@ -504,12 +518,24 @@
   white-space: nowrap;
 }
 
+// LLM agent change: failure port is always visible and interactive (drag from it to create a
+// failure route). Was display:none unless bound; now a circular port matching the success one.
 .dialogue-canvas-choice-failure-port {
-  display: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 2px solid var(--background-primary);
+  background: var(--dialogue-choice-failure-color, var(--text-error));
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.25);
+  transition: transform 0.1s ease;
+}
+
+.dialogue-canvas-choice-failure-port:hover {
+  transform: scale(1.2);
 }
 
 .dialogue-canvas-choice-failure-port.dialogue-canvas-choice-route-port {
-  display: block;
+  position: absolute;
   right: -7px;
   background: var(--dialogue-choice-failure-color, var(--text-error));
 }
