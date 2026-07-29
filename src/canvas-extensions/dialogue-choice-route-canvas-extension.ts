@@ -166,9 +166,15 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
     ))
 
     const rerender = (canvas: Canvas) => this.scheduleRenderCanvas(canvas)
+    // LLM agent change: native edges re-render very frequently (on hover, focus, drag, viewport
+    // changes), and 'edge-rendered:after' fires for each. Calling renderRouteEdge synchronously
+    // on every fire forced a getBoundingClientRect read each time -> layout thrashing -> visible
+    // lag whenever the cursor sat over an edge. Coalesce into the rAF-scheduled full-canvas render
+    // (scheduleRenderCanvas dedupes to one frame per canvas), so many edge-rendered events in a
+    // single frame collapse into a single route re-render.
     this.plugin.registerEvent(this.plugin.app.workspace.on(
       "advanced-canvas:edge-rendered:after",
-      (canvas: Canvas, edge: CanvasEdge) => this.renderRouteEdge(canvas, edge)
+      rerender
     ))
     this.plugin.registerEvent(this.plugin.app.workspace.on(
       "advanced-canvas:dialogue-frame-rendered",
