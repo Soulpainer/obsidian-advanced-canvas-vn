@@ -159,6 +159,7 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
     choiceId: string
     outcome: DialogueChoiceRouteOutcome
     edge: CanvasEdge
+    lastPointerEvent: PointerEvent
   } | null = null
 
   // LLM agent change: route edges bind to numbered choices stored inside frame nodes.
@@ -187,7 +188,17 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
     // cheap now that the anchor reads only canvas geometry (no getBoundingClientRect reflow).
     this.plugin.registerEvent(this.plugin.app.workspace.on(
       "advanced-canvas:edge-rendered:after",
-      (canvas: Canvas, edge: CanvasEdge) => this.renderRouteEdge(canvas, edge)
+      (canvas: Canvas, edge: CanvasEdge) => {
+        // LLM agent change: while a choice-drag is in progress, the native edge render would
+        // redraw our temp edge back to its data target (currently the source node, looping on
+        // itself). Intercept it and re-draw the drag preview path from the choice anchor to the
+        // cursor so the drag follows the pointer.
+        if (this.choiceDrag && this.choiceDrag.edge === edge) {
+          this.drawChoiceDragPath(this.choiceDrag.lastPointerEvent)
+          return
+        }
+        this.renderRouteEdge(canvas, edge)
+      }
     ))
     this.plugin.registerEvent(this.plugin.app.workspace.on(
       "advanced-canvas:dialogue-frame-rendered",
@@ -574,9 +585,10 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
     }
     this.applyEdgeColor(edge, this.getRouteColorCss(choiceIndex, outcome))
 
-    this.choiceDrag = { canvas, sourceNode, choiceId, outcome, edge }
+    this.choiceDrag = { canvas, sourceNode, choiceId, outcome, edge, lastPointerEvent: startEvent }
 
     const onPointerMove = (moveEvent: PointerEvent) => {
+      this.choiceDrag = { ...this.choiceDrag!, lastPointerEvent: moveEvent }
       this.drawChoiceDragPath(moveEvent)
     }
     const onPointerUp = (upEvent: PointerEvent) => {
