@@ -635,64 +635,12 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
       return
     }
 
-    // LLM agent change: don't create the temp edge on pointerdown — a plain click would otherwise
-    // leave a self-looping edge on the source. Create it lazily on the first pointermove (real
-    // drag), and tear everything down on pointerup if no drag ever started.
-    const dragState = {
-      canvas,
-      sourceNode,
-      choiceId,
-      outcome,
-      startEvent,
-      edge: null as CanvasEdge | null,
-    }
-
-    const onPointerMove = (moveEvent: PointerEvent) => {
-      if (!dragState.edge) {
-        dragState.edge = this.createChoiceDragEdge(canvas, sourceNode, choiceId, outcome)
-        if (!dragState.edge) {
-          cleanup()
-          return
-        }
-        this.choiceDrag = {
-          canvas,
-          sourceNode,
-          choiceId,
-          outcome,
-          edge: dragState.edge,
-          lastPointerEvent: moveEvent,
-        }
-      } else {
-        this.choiceDrag = { ...this.choiceDrag!, lastPointerEvent: moveEvent }
-      }
-      this.drawChoiceDragPath(moveEvent)
-    }
-    const onPointerUp = (upEvent: PointerEvent) => {
-      cleanup()
-      if (dragState.edge) {
-        this.finishChoiceDrag(upEvent)
-      }
-    }
-    const cleanup = () => {
-      activeDocument.removeEventListener("pointermove", onPointerMove)
-      activeDocument.removeEventListener("pointerup", onPointerUp)
-    }
-
-    activeDocument.addEventListener("pointermove", onPointerMove)
-    activeDocument.addEventListener("pointerup", onPointerUp)
-  }
-
-  // LLM agent change: create the temp edge for a choice drag, bound to the choice so route
-  // styling applies. toNode points back at the source for now; rewired on drop.
-  private createChoiceDragEdge(
-    canvas: Canvas,
-    sourceNode: CanvasNode,
-    choiceId: string,
-    outcome: DialogueChoiceRouteOutcome
-  ): CanvasEdge | null {
     const sourceNodeId = sourceNode.getData().id
-    const choiceIndex = this.getChoiceIndex(sourceNode, choiceId)
     const tempEdgeId = `choice-drag-${sourceNodeId}-${choiceId}-${Date.now()}`
+    const choiceIndex = this.getChoiceIndex(sourceNode, choiceId)
+
+    // Create a temp edge already bound to the choice (so route styling applies during the drag).
+    // toNode points back at the source for now; we'll rewire on drop.
     const tempEdgeData = {
       id: tempEdgeId,
       fromNode: sourceNodeId,
@@ -708,14 +656,31 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
 
     const edge = canvas.edges.get(tempEdgeId)
     if (!edge) {
-      return null
+      return
     }
     if (outcome === "failure") {
       edge.path.display.setAttr("data-path", "short-dashed")
       edge.path.interaction.setAttr("data-path", "short-dashed")
     }
     this.applyEdgeColor(edge, this.getRouteColorCss(choiceIndex, outcome))
-    return edge
+
+    this.choiceDrag = { canvas, sourceNode, choiceId, outcome, edge, lastPointerEvent: startEvent }
+
+    const onPointerMove = (moveEvent: PointerEvent) => {
+      this.choiceDrag = { ...this.choiceDrag!, lastPointerEvent: moveEvent }
+      this.drawChoiceDragPath(moveEvent)
+    }
+    const onPointerUp = (upEvent: PointerEvent) => {
+      activeDocument.removeEventListener("pointermove", onPointerMove)
+      activeDocument.removeEventListener("pointerup", onPointerUp)
+      this.finishChoiceDrag(upEvent)
+    }
+
+    activeDocument.addEventListener("pointermove", onPointerMove)
+    activeDocument.addEventListener("pointerup", onPointerUp)
+
+    // Draw the initial segment immediately.
+    this.drawChoiceDragPath(startEvent)
   }
 
   private getChoiceIndex(sourceNode: CanvasNode, choiceId: string): number {
