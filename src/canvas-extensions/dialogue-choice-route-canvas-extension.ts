@@ -505,31 +505,37 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
     this.wireChoicePortDragHandlers(canvas, sourceNode)
   }
 
-  // LLM agent change: attach a pointerdown handler to each choice port on the node so the user can
-  // drag a brand-new edge straight from a specific choice (auto-binding it). Binds on the NODE
-  // element in the capture phase and checks whether the pointer landed on a choice port, because
-  // Obsidian's native resize handle sits on the right edge (same place as the port) and binds its
-  // own pointerdown earlier — a port-only listener never fires. Capture on the common ancestor
-  // (the node) runs before the resize handle's target-phase handler.
+  // LLM agent change: attach a capture-phase pointerdown handler on the canvas wrapper so a drag
+  // starting from a choice port starts a route drag instead of a node resize. Binds on the
+  // wrapper (the highest ancestor that still lets us resolve which canvas node the port belongs
+  // to), because Obsidian's resize handle is bound on the node/interaction layer and would
+  // otherwise swallow the pointerdown before any node-level listener runs. Capture on the
+  // wrapper fires first.
   private wireChoicePortDragHandlers(canvas: Canvas, sourceNode: CanvasNode) {
-    const nodeEl = this.getNodeElement(sourceNode)
-    if (!nodeEl || this.wiredChoicePorts.has(nodeEl)) {
+    const wrapperEl = canvas.wrapperEl
+    if (!wrapperEl || this.wiredChoicePorts.has(wrapperEl)) {
       return
     }
-    this.wiredChoicePorts.add(nodeEl)
+    this.wiredChoicePorts.add(wrapperEl)
 
-    nodeEl.addEventListener("pointerdown", (event: PointerEvent) => {
+    wrapperEl.addEventListener("pointerdown", (event: PointerEvent) => {
       const target = event.target
       if (!(target instanceof HTMLElement)) {
         return
       }
       const portEl = target.closest(".dialogue-canvas-choice-swatch, .dialogue-canvas-choice-failure-port") as HTMLElement | null
-      if (!portEl || !nodeEl.contains(portEl)) {
+      if (!portEl || !wrapperEl.contains(portEl)) {
         return
       }
 
-      event.preventDefault()
-      event.stopPropagation()
+      const nodeEl = portEl.closest(".canvas-node") as HTMLElement | null
+      if (!nodeEl) {
+        return
+      }
+      const sourceNode = this.findNodeByDomEl(canvas, nodeEl)
+      if (!sourceNode) {
+        return
+      }
 
       const choiceId = portEl.dataset.dialogueChoiceId
       const outcome = (portEl.dataset.dialogueChoiceOutcome ?? "success") as DialogueChoiceRouteOutcome
@@ -537,15 +543,28 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
         return
       }
 
+      event.preventDefault()
+      event.stopPropagation()
+
       this.startChoiceDrag(canvas, sourceNode, choiceId, outcome, event)
     }, { capture: true })
 
-    const ports = Array.from(nodeEl.querySelectorAll<HTMLElement>(
+    const ports = Array.from(wrapperEl.querySelectorAll<HTMLElement>(
       ".dialogue-canvas-choice-swatch, .dialogue-canvas-choice-failure-port"
     ))
     for (const portEl of ports) {
       portEl.style.cursor = "crosshair"
     }
+  }
+
+  // LLM agent change: resolve a canvas node by its DOM element (matches nodeEl by identity).
+  private findNodeByDomEl(canvas: Canvas, nodeEl: HTMLElement): CanvasNode | null {
+    for (const node of canvas.nodes.values()) {
+      if (node.nodeEl === nodeEl) {
+        return node
+      }
+    }
+    return null
   }
 
   // LLM agent change: drive a custom edge drag starting from a choice port. Creates a temporary

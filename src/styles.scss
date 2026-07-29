@@ -374,6 +374,13 @@
   overflow: visible;
 }
 
+// LLM agent change: choice ports sit on the node's right edge (right:-7px) and must remain
+// clickable even though they stick out of the container. The base frame-node container is
+// overflow:hidden (line 31); allow it to show the ports for choice nodes.
+.canvas-node.dialogue-canvas-has-choices > .canvas-node-container {
+  overflow: visible;
+}
+
 .canvas-node > .dialogue-canvas-choice-list {
   position: absolute;
   left: 0;
@@ -418,7 +425,7 @@
 // pointerdown.
 .dialogue-canvas-choice-swatch {
   position: absolute;
-  right: 0;
+  right: -7px;
   top: 50%;
 
   width: 14px;
