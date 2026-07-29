@@ -4,7 +4,7 @@
 /* eslint-disable @typescript-eslint/no-unsafe-argument -- LLM agent change: Obsidian Canvas internals are partially untyped. */
 /* eslint-disable @typescript-eslint/no-unsafe-return -- LLM agent change: Obsidian Canvas internals are partially untyped. */
 /* eslint-disable @typescript-eslint/no-unnecessary-type-assertion -- LLM agent change: explicit Canvas DOM assertions keep intent visible. */
-import { ButtonComponent, Modal, Notice, Setting } from "obsidian"
+import { ButtonComponent, Menu, Modal, Notice, Setting } from "obsidian"
 import { Side } from "src/@types/AdvancedJsonCanvas"
 import { Canvas, CanvasEdge, CanvasElement, CanvasNode, Position, Size } from "src/@types/Canvas"
 import {
@@ -222,6 +222,24 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
     this.plugin.registerEvent(this.plugin.app.workspace.on(
       "advanced-canvas:edge-connection-dragging:before",
       (canvas: Canvas) => this.renderWhilePointerMoves(canvas)
+    ))
+    // LLM agent change: when a choice-port drag ends on empty space, Obsidian shows the native
+    // connection-drop menu — but our router's spawn items don't work there (the native dragged
+    // edge conflicts with the spawn edge), and the menu stacked on repeated attempts. Until
+    // drop-to-spawn is properly supported for choice drags, hide the menu's items during a choice
+    // drag so the user just gets a clean cancellation.
+    this.plugin.registerEvent(this.plugin.app.workspace.on(
+      "canvas:node-connection-drop-menu",
+      (menu: Menu) => {
+        if (this.choiceDragInProgress) {
+          // Hide the spawn menu during a choice-port drag (drop-to-spawn isn't supported for
+          // choice drags yet — it conflicts with the native dragged edge — and the menu stacked
+          // on repeated attempts). Clear our drag state so the next drag starts fresh.
+          menu.hide()
+          this.pendingChoiceRoute = null
+          this.choiceDragInProgress = false
+        }
+      }
     ))
     // LLM agent change: when a node is spawned by dragging an edge onto empty space, prompt to
     // bind the new edge to a choice if the source frame has any.
