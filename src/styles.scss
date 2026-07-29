@@ -81,6 +81,18 @@
   }
 }
 
+// LLM agent change: when hovering a dialogue frame with choices, disable the right-side resize
+// handles (right, topright, bottomright) so clicks on the choice ports on the right edge start a
+// route drag instead of a resize. The other handles (top/bottom/left + their corners) stay
+// active, so the frame can still be resized vertically/horizontally.
+.canvas-node-interaction-layer[data-is-dialogue-frame="true"] {
+  .canvas-node-resizer[data-resize="right"],
+  .canvas-node-resizer[data-resize="topright"],
+  .canvas-node-resizer[data-resize="bottomright"] {
+    pointer-events: none;
+  }
+}
+
 .canvas-node-interaction-layer[data-has-dialogue-router-outgoing-edge="true"] {
   .canvas-node-connection-point {
     display: none;

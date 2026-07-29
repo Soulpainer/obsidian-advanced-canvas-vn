@@ -535,6 +535,15 @@ export default class DialogueRouterCanvasExtension extends CanvasExtension {
       delete interactionEl.dataset.isDialogueRouter
       delete interactionEl.dataset.isSelectedDialogueRouter
       delete interactionEl.dataset.hasDialogueRouterOutgoingEdge
+
+      // LLM agent change: mark the interaction layer when hovering a dialogue FRAME with choices,
+      // so CSS can disable the right-side resize handles on its right edge (where the choice
+      // ports live) and let our choice-port drag receive the pointerdown instead.
+      if (this.lastInteractionNode && this.isFrameWithChoices(this.lastInteractionNode)) {
+        interactionEl.dataset.isDialogueFrame = "true"
+      } else {
+        delete interactionEl.dataset.isDialogueFrame
+      }
       return
     }
 
@@ -602,6 +611,14 @@ export default class DialogueRouterCanvasExtension extends CanvasExtension {
   private isRouterNode(node: CanvasNode): boolean {
     const nodeData = node.getData() as CanvasNodeDataWithDialogue
     return nodeData["x-dialogue"]?.router?.type === "point"
+  }
+
+  // LLM agent change: true for dialogue frames that actually have choices rendered (so the
+  // choice ports exist on the right edge and the right resize handles must be disabled).
+  private isFrameWithChoices(node: CanvasNode): boolean {
+    const nodeData = node.getData() as CanvasNodeDataWithDialogue
+    const choices = nodeData["x-dialogue"]?.frame?.choices
+    return Array.isArray(choices) && choices.length > 0
   }
 
   // LLM agent change: true for dialogue frames and route points — the only nodes the drag-to-spawn
