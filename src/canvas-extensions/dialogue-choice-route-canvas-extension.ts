@@ -131,8 +131,15 @@ class EditDialogueChoiceRouteModal extends Modal {
 export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension {
   private readonly minFrameContentHeight = 120
   private readonly choicesTopGap = 12
-  private readonly choiceRowHeight = 30
-  private readonly choiceFailureRowHeight = 24
+  // LLM agent change: real measured choice-row geometry (border-box, from a rendered node).
+  // A row without a failure sub-block is 22px tall; a failure sub-block adds 30px (so a row with
+  // failure is 52px). The success port sits at the row's vertical center (11px from the row top);
+  // the failure port sits 38px from the row top. These come from measuring offsetTop/offsetHeight
+  // of a rendered choice-list and matching against real canvas-Y anchors.
+  private readonly choiceRowHeight = 22
+  private readonly choiceFailureRowHeight = 30
+  private readonly choiceSuccessRowCenter = 11
+  private readonly choiceFailureRowCenter = 38
   private readonly choicesBottomPadding = 12
   // LLM agent change: these Maps are declared WITHOUT initializers and created in init().
   // Reason: the CanvasExtension base constructor calls this.init() from within super(), which
@@ -537,10 +544,12 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
     // anchor computed from the node bbox and the choice-list layout (see getChoiceAnchorGeometric).
     if (targetEl && this.isDomAnchorUsable(canvas, sourceNode, targetEl)) {
       const rect = targetEl.getBoundingClientRect()
-      return canvas.posFromClient({
+      const viewportAnchor = canvas.posFromClient({
         x: portEl ? rect.left + rect.width / 2 : rect.right,
         y: rect.top + rect.height / 2,
       })
+
+      return viewportAnchor
     }
 
     const sourceNodeData = sourceNode.getData() as CanvasNodeDataWithDialogue
@@ -583,30 +592,28 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
     const listBottomPadding = 8
     const listGap = 4
 
-    // Stack choices from the top of the list to find this choice's row top offset.
+    // LLM agent change: find the row index of the requested choice (choiceId is a 1-based string,
+    // but choices[] may have gaps, so match by id rather than position). Then stack the heights of
+    // all preceding rows — INCLUDING the gap before this row — to get this row's top offset.
+    const targetIndex = choices.findIndex(choice => choice?.choiceId === choiceId)
+    if (targetIndex < 0) {
+      // Unknown choice — anchor at the right-center of the node as a safe default.
+      return { x: nodeRightX, y: (bbox.minY + bbox.maxY) / 2 }
+    }
+
     let rowTopOffset = 0
-    let found = false
-    for (let index = 0; index < choices.length; index++) {
+    for (let index = 0; index < targetIndex; index++) {
       const choice = choices[index]
       if (!choice) {
         continue
       }
-      if (index > 0) {
+      if (index > 0 || targetIndex > 0) {
         rowTopOffset += listGap
-      }
-      if (choice.choiceId === choiceId) {
-        found = true
-        break
       }
       rowTopOffset += this.choiceRowHeight
       if (this.choiceHasFailureSlot(choice)) {
         rowTopOffset += this.choiceFailureRowHeight
       }
-    }
-
-    if (!found) {
-      // Unknown choice — anchor at the right-center of the node as a safe default.
-      return { x: nodeRightX, y: (bbox.minY + bbox.maxY) / 2 }
     }
 
     // The list's total height, used to compute its top Y from the node's bottom.
@@ -617,13 +624,9 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
 
     const listTopY = bbox.maxY - listBottomPadding - listHeight
 
-    // Within the row: success port at row center; failure port in the sub-block below the row.
-    let yOffsetInRow: number
-    if (outcome === "failure") {
-      yOffsetInRow = this.choiceRowHeight + this.choiceFailureRowHeight / 2
-    } else {
-      yOffsetInRow = this.choiceRowHeight / 2
-    }
+    // LLM agent change: measured row-relative port centers (see constants above): success port
+    // at 11px from the row top, failure port at 38px from the row top.
+    const yOffsetInRow = outcome === "failure" ? this.choiceFailureRowCenter : this.choiceSuccessRowCenter
 
     return {
       x: nodeRightX,

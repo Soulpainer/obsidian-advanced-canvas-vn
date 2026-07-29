@@ -49,8 +49,12 @@ export default class DialogueFrameCanvasExtension extends CanvasExtension {
   private readonly minSpeakerNodeHeight = 160
   private readonly minFrameContentHeight = 120
   private readonly choicesTopGap = 12
-  private readonly choiceRowHeight = 30
-  private readonly choiceFailureRowHeight = 24
+  // LLM agent change: real measured choice-row geometry (kept in sync with
+  // DialogueChoiceRouteCanvasExtension). A row without failure is 22px; a failure sub-block adds
+  // 30px. Used to compute the choice-list / node height. See the route extension for the matching
+  // port-center constants.
+  private readonly choiceRowHeight = 22
+  private readonly choiceFailureRowHeight = 30
   private readonly choicesBottomPadding = 12
   private readonly minDialogueNodeWidth = 280
 
