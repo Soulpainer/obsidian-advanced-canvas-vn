@@ -503,6 +503,12 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
   // shifted default connection point) instead of the geometric center.
   private renderDefaultEdgeFromFrameRight(canvas: Canvas, edge: CanvasEdge) {
     const edgeData = edge.getData() as CanvasEdgeDataWithDialogue
+    // LLM agent change: only re-anchor DEFAULT edges (no route). Route edges have their own anchor
+    // (getChoiceAnchor) handled by renderRouteEdge; re-anchoring them here collapsed all routes to
+    // the upper-quarter point.
+    if (this.getChoiceRoute(edgeData["x-dialogue"]?.route)) {
+      return
+    }
     if (edgeData.fromSide !== "right" || !edge.bezier || !edgeData.fromNode) {
       return
     }
