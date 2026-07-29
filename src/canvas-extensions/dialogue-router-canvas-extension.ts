@@ -31,10 +31,14 @@ export default class DialogueRouterCanvasExtension extends CanvasExtension {
   private menuObserver: MutationObserver | null = null
   private lastContextMenuRequest: { canvas: Canvas, position: Position } | null = null
   private lastInteractionNode: CanvasNode | null = null
-  // LLM agent change: set when a drag-to-spawn is about to show our spawn menu. The native
-  // 'canvas:node-connection-drop-menu' handler checks this to suppress Obsidian's own drop menu
-  // (otherwise both menus appear at once for dialogue nodes).
-  private suppressNativeDropMenu = false
+  // LLM agent change: remembers the source node of an in-progress edge drag, captured at drag
+  // start (edge-connection-dragging:before) and consumed by the native connection-drop-menu
+  // handler to decide whether to add our 'Add dialogue frame / route point' items.
+  private lastDragSourceNode: CanvasNode | null = null
+  // LLM agent change: last canvas-space position where the pointer was released, captured on the
+  // active canvas's pointerup. The connection-drop-menu event gives us no coordinates, so we use
+  // this to spawn the node where the user dropped.
+  private lastDropPosition: Position | null = null
 
   isEnabled() {
     return true
@@ -98,23 +102,47 @@ export default class DialogueRouterCanvasExtension extends CanvasExtension {
       (canvas: Canvas) => this.onSelectionChanged(canvas)
     ))
 
-    // LLM agent change: drag a new edge onto empty canvas space to spawn a dialogue node there.
+    // LLM agent change: capture the source node of an edge drag at its start, so the native
+    // connection-drop-menu handler can add our spawn items only for dialogue-node sources.
     this.plugin.registerEvent(this.plugin.app.workspace.on(
-      "advanced-canvas:edge-connection-dragging:after",
-      (canvas: Canvas, edge: CanvasEdge, event: PointerEvent, newEdge: boolean, side: "from" | "to") =>
-        this.onEdgeConnectionDrop(canvas, edge, event, newEdge, side)
+      "advanced-canvas:edge-connection-dragging:before",
+      (canvas: Canvas, edge: CanvasEdge) => {
+        this.lastDragSourceNode = edge?.from?.node ?? null
+      }
     ))
 
-    // LLM agent change: suppress Obsidian's own connection-drop menu when we're about to show our
-    // spawn menu (raised in onEdgeConnectionDrop for dialogue-node sources). Without this, both
-    // menus appear at the drop location at the same time.
+    // LLM agent change: instead of showing a separate spawn menu (which conflicted with Obsidian's
+    // own connection-drop menu), add 'Add dialogue frame' / 'Add dialogue route point' as items in
+    // the native drop menu — but only when the drag started from a dialogue node. The drop
+    // position is captured from the event below (cursor coords at release).
     this.plugin.registerEvent(this.plugin.app.workspace.on(
       "canvas:node-connection-drop-menu",
-      (menu: Menu) => {
-        if (this.suppressNativeDropMenu) {
-          menu.hide()
-          this.suppressNativeDropMenu = false
+      (menu: Menu, canvas: Canvas) => {
+        const sourceNode = this.lastDragSourceNode
+        if (!sourceNode || canvas.readonly || !this.isDialogueNode(sourceNode)) {
+          return
         }
+
+        const dropPosition = this.lastDropPosition
+        if (!dropPosition) {
+          return
+        }
+        const sourceNodeId = sourceNode.getData().id
+
+        menu.addItem(item => {
+          item
+            .setTitle("Add dialogue frame")
+            .setIcon("message-square-plus")
+            .onClick(() => this.spawnNodeAtDrop(canvas, sourceNodeId, dropPosition, "frame"))
+        })
+        menu.addItem(item => {
+          item
+            .setTitle("Add dialogue route point")
+            .setIcon("circle-dot")
+            .onClick(() => this.spawnNodeAtDrop(canvas, sourceNodeId, dropPosition, "router"))
+        })
+
+        this.lastDragSourceNode = null
       }
     ))
 
@@ -157,9 +185,17 @@ export default class DialogueRouterCanvasExtension extends CanvasExtension {
       window.setTimeout(() => this.injectRouterMenuItem(), 50)
     }
 
+    // LLM agent change: capture the canvas-space position of the last pointer release, so the
+    // connection-drop-menu handler can spawn a node where the user dropped the dragged edge.
+    const onPointerUp = (event: PointerEvent) => {
+      this.lastDropPosition = canvas.posFromEvt(event)
+    }
+
     wrapperEl.addEventListener("contextmenu", onContextMenu)
+    wrapperEl.addEventListener("pointerup", onPointerUp)
     this.plugin.register(() => {
       wrapperEl.removeEventListener("contextmenu", onContextMenu)
+      wrapperEl.removeEventListener("pointerup", onPointerUp)
     })
   }
 
@@ -315,73 +351,6 @@ export default class DialogueRouterCanvasExtension extends CanvasExtension {
   // LLM agent change: when the user drags a brand-new edge from a node and releases it on empty
   // canvas space, offer to spawn a dialogue frame or a route point at the drop location and wire
   // the edge to it. If the source node is a frame with choices, the choice-route extension will
-  // additionally prompt to bind the new edge to a choice (handled via the dialogue-edge-needs-route
-  // event, see DialogueChoiceRouteCanvasExtension).
-  private onEdgeConnectionDrop(
-    canvas: Canvas,
-    edge: CanvasEdge,
-    event: PointerEvent,
-    newEdge: boolean,
-    side: "from" | "to"
-  ) {
-    // Only handle freshly created edges dragged by their target end onto empty space.
-    if (!newEdge || side !== "to") {
-      return
-    }
-
-    // Grab the source synchronously, before Obsidian discards the dangling edge.
-    const sourceNode = edge.from?.node
-    if (!sourceNode || canvas.readonly) {
-      return
-    }
-
-    // LLM agent change: only offer the spawn menu when the drag started from a dialogue node
-    // (frame or route point). Native nodes keep Obsidian's default edge-drag behavior.
-    if (!this.isDialogueNode(sourceNode)) {
-      return
-    }
-
-    const dropPosition = canvas.posFromEvt(event)
-
-    // If the drop landed on an existing node, let Obsidian wire it natively.
-    if (this.isPointOverNode(canvas, dropPosition)) {
-      return
-    }
-
-    const screenX = event.clientX
-    const screenY = event.clientY
-    const sourceNodeId = sourceNode.getData().id
-
-    // LLM agent change: raise the suppress flag BEFORE Obsidian builds its native drop menu. The
-    // canvas:node-connection-drop-menu listener will see this and close the native menu; our own
-    // spawn menu is shown right after.
-    this.suppressNativeDropMenu = true
-
-    // LLM agent change: defer the menu to the next tick. Showing it synchronously inside the
-    // pointerup handler lets the rest of Obsidian's drag-finalization (which can emit a stray
-    // click / close-overlays call) dismiss the menu instantly. A 0ms timeout yields first so the
-    // menu survives.
-    window.setTimeout(() => {
-      new Menu()
-        .addItem(item => {
-          item
-            .setTitle("Add dialogue frame")
-            .setIcon("message-square-plus")
-            .onClick(() => this.spawnNodeAtDrop(canvas, sourceNodeId, dropPosition, "frame"))
-        })
-        .addItem(item => {
-          item
-            .setTitle("Add dialogue route point")
-            .setIcon("circle-dot")
-            .onClick(() => this.spawnNodeAtDrop(canvas, sourceNodeId, dropPosition, "router"))
-        })
-        .showAtPosition({ x: screenX, y: screenY })
-
-      // Reset shortly after, so the flag doesn't leak into an unrelated later drop.
-      window.setTimeout(() => { this.suppressNativeDropMenu = false }, 100)
-    }, 0)
-  }
-
   // LLM agent change: create a frame or router node centered at the drop position, then wire an
   // edge from the source node to it. After wiring, emit dialogue-edge-needs-route so the
   // choice-route extension can prompt for a choice binding (frame source with choices) and open
@@ -473,31 +442,6 @@ export default class DialogueRouterCanvasExtension extends CanvasExtension {
     } else {
       this.renderRouterNode(canvas, node)
     }
-  }
-
-  // LLM agent change: returns true if a canvas-space point lies inside any existing node's bbox.
-  // Used to decide whether a dragged-edge drop hit empty space (offer the spawn menu) or a node
-  // (let Obsidian handle it natively).
-  private isPointOverNode(canvas: Canvas, point: Position): boolean {
-    for (const node of canvas.nodes.values()) {
-      const data = node.getData()
-      const x = data.x
-      const y = data.y
-      const width = data.width
-      const height = data.height
-      if (x === undefined || y === undefined || width === undefined || height === undefined) {
-        continue
-      }
-      if (
-        point.x >= x &&
-        point.x <= x + width &&
-        point.y >= y &&
-        point.y <= y + height
-      ) {
-        return true
-      }
-    }
-    return false
   }
 
   private enforceSingleOutgoingEdge(canvas: Canvas, edge: CanvasEdge) {
