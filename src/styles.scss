@@ -411,7 +411,9 @@
 
 // LLM agent change: success port is always visible and interactive, positioned on the node's
 // right edge (matching the bound-route-port look). Drag from it to create a route bound to this
-// choice. Out of the grid flow (absolute) so the text/meta columns keep their layout.
+// choice. Out of the grid flow (absolute) so the text/meta columns keep their layout. High
+// z-index so it sits above the native node resize handles on the right edge and receives the
+// pointerdown (the native handles otherwise capture it and start a resize).
 .dialogue-canvas-choice-swatch {
   position: absolute;
   right: -7px;
@@ -425,6 +427,9 @@
   box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.25);
   transform: translateY(-50%);
   transition: transform 0.1s ease;
+
+  pointer-events: auto;
+  z-index: 100;
 }
 
 .dialogue-canvas-choice-swatch:hover {
@@ -533,6 +538,9 @@
   background: var(--dialogue-choice-failure-color, var(--text-error));
   box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.25);
   transition: transform 0.1s ease;
+
+  pointer-events: auto;
+  z-index: 100;
 }
 
 .dialogue-canvas-choice-failure-port:hover {
