@@ -151,15 +151,13 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
   // LLM agent change: choice ports we've already attached a custom drag pointerdown handler to,
   // so re-rendering a node doesn't double-bind. Re-checked against the live DOM on every render.
   private wiredChoicePorts!: WeakSet<HTMLElement>
-  // LLM agent change: in-progress choice-drag state. Set on choice-port pointerdown, cleared on
-  // pointerup. Holds the temp edge being dragged from a choice port.
-  private choiceDrag: {
-    canvas: Canvas
-    sourceNode: CanvasNode
+  // LLM agent change: when a choice-port drag delegates to Obsidian's native onConnectionPointerdown
+  // (to get a real floating-end drag), we remember the intended choice+outcome here, and the
+  // edge-created listener binds the resulting edge to it automatically.
+  private pendingChoiceRoute: {
+    sourceNodeId: string
     choiceId: string
     outcome: DialogueChoiceRouteOutcome
-    edge: CanvasEdge
-    lastPointerEvent: PointerEvent
   } | null = null
 
   // LLM agent change: route edges bind to numbered choices stored inside frame nodes.
@@ -189,14 +187,6 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
     this.plugin.registerEvent(this.plugin.app.workspace.on(
       "advanced-canvas:edge-rendered:after",
       (canvas: Canvas, edge: CanvasEdge) => {
-        // LLM agent change: while a choice-drag is in progress, the native edge render would
-        // redraw our temp edge back to its data target (currently the source node, looping on
-        // itself). Intercept it and re-draw the drag preview path from the choice anchor to the
-        // cursor so the drag follows the pointer.
-        if (this.choiceDrag && this.choiceDrag.edge === edge) {
-          this.drawChoiceDragPath(this.choiceDrag.lastPointerEvent)
-          return
-        }
         // LLM agent change: re-render synchronously so our path is the last write in the frame
         // (native edge.render rewrites the path on node move/resize). renderRouteEdge handles
         // choice-route edges; renderDefaultEdgeFromFrameRight re-anchors non-route edges leaving
@@ -208,6 +198,13 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
     this.plugin.registerEvent(this.plugin.app.workspace.on(
       "advanced-canvas:dialogue-frame-rendered",
       (canvas: Canvas, node: CanvasNode) => this.renderSourceNodeRoutes(canvas, node)
+    ))
+    // LLM agent change: when a choice-port drag delegates to the native onConnectionPointerdown
+    // (so the user gets a real floating-end drag), the resulting new edge lands here. If we have
+    // a pending choice route, bind it to the new edge automatically — no modal.
+    this.plugin.registerEvent(this.plugin.app.workspace.on(
+      "advanced-canvas:edge-created",
+      (canvas: Canvas, edge: CanvasEdge) => this.onEdgeCreatedFromChoicePort(canvas, edge)
     ))
     const rerender = (canvas: Canvas) => this.scheduleRenderCanvas(canvas)
     this.plugin.registerEvent(this.plugin.app.workspace.on("advanced-canvas:node-changed", rerender))
@@ -620,184 +617,59 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
     return null
   }
 
-  // LLM agent change: drive a custom edge drag starting from a choice port. Creates a temporary
-  // edge (toNode = source node) already bound to the choice, draws its path from the choice anchor
-  // to the cursor on every pointermove, and on pointerup either re-targets it to the node under
-  // the cursor (committing the route) or offers the spawn menu (for empty space).
+  // LLM agent change: start a route drag from a choice port by delegating to Obsidian's NATIVE
+  // node.onConnectionPointerdown. This gives the user a real floating-end drag (the edge's free
+  // end follows the cursor, snaps to nodes, supports drop-to-spawn via the native menu) — instead
+  // of the previous temp-edge-on-self approach, which was stuck anchored to the source node.
+  // We remember the intended choice+outcome in pendingChoiceRoute, and onEdgeCreatedFromChoicePort
+  // binds the resulting edge to it once the native drag creates it.
   private startChoiceDrag(
-    canvas: Canvas,
+    _canvas: Canvas,
     sourceNode: CanvasNode,
     choiceId: string,
     outcome: DialogueChoiceRouteOutcome,
     startEvent: PointerEvent
   ) {
-    if (canvas.readonly) {
+    this.pendingChoiceRoute = {
+      sourceNodeId: sourceNode.getData().id,
+      choiceId,
+      outcome,
+    }
+
+    // Delegate to the native connection drag from the source node's right side. This is the same
+    // call Obsidian makes when the user drags from the right connection point.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- onConnectionPointerdown exists on CanvasNode at runtime
+    ;(sourceNode as any).onConnectionPointerdown?.(startEvent, "right")
+  }
+
+  // LLM agent change: bind a newly-created edge to the pending choice route (if any), instead of
+  // leaving it as a plain edge that would later open the choice-binding modal.
+  private onEdgeCreatedFromChoicePort(canvas: Canvas, edge: CanvasEdge) {
+    const pending = this.pendingChoiceRoute
+    if (!pending) {
       return
     }
 
-    const sourceNodeId = sourceNode.getData().id
-    const choiceIndex = this.getChoiceIndex(sourceNode, choiceId)
-    const dragThreshold = 4 // px of pointer movement before we treat it as a drag, not a click
-
-    // LLM agent change: do NOT create the temp edge on pointerdown — a plain click would leave a
-    // self-looping edge on the source. Create it lazily once the pointer moves past a small
-    // threshold (a real drag). Track creation state explicitly so cleanup always removes listeners.
-    let edge: CanvasEdge | null = null
-    let edgeCreated = false
-
-    const ensureEdge = () => {
-      if (edgeCreated) {
-        return
-      }
-      edgeCreated = true
-
-      const tempEdgeId = `choice-drag-${sourceNodeId}-${choiceId}-${Date.now()}`
-      const tempEdgeData = {
-        id: tempEdgeId,
-        fromNode: sourceNodeId,
-        fromSide: "right" as Side,
-        toNode: sourceNodeId,
-        toSide: "right" as Side,
-        color: this.getRouteCanvasColorId(Math.max(choiceIndex, 0)),
-        ["x-dialogue"]: {
-          route: { type: "choice", choiceId, outcome },
-        },
-      }
-      canvas.importData({ nodes: [], edges: [tempEdgeData] }, false, false)
-
-      edge = canvas.edges.get(tempEdgeId) ?? null
-      if (!edge) {
-        return
-      }
-      if (outcome === "failure") {
-        edge.path.display.setAttr("data-path", "short-dashed")
-        edge.path.interaction.setAttr("data-path", "short-dashed")
-      }
-      this.applyEdgeColor(edge, this.getRouteColorCss(choiceIndex, outcome))
-
-      this.choiceDrag = {
-        canvas,
-        sourceNode,
-        choiceId,
-        outcome,
-        edge,
-        lastPointerEvent: startEvent,
-      }
-    }
-
-    const onPointerMove = (moveEvent: PointerEvent) => {
-      const dx = moveEvent.clientX - startEvent.clientX
-      const dy = moveEvent.clientY - startEvent.clientY
-      if (Math.hypot(dx, dy) < dragThreshold) {
-        return
-      }
-      ensureEdge()
-      if (!this.choiceDrag || !edge) {
-        return
-      }
-      this.choiceDrag = { ...this.choiceDrag, lastPointerEvent: moveEvent }
-      this.drawChoiceDragPath(moveEvent)
-    }
-    const onPointerUp = (upEvent: PointerEvent) => {
-      activeDocument.removeEventListener("pointermove", onPointerMove)
-      activeDocument.removeEventListener("pointerup", onPointerUp)
-      // Only finalize if an edge was actually created (i.e. a real drag happened). A plain click
-      // leaves nothing behind.
-      if (edge) {
-        this.finishChoiceDrag(upEvent)
-      }
-    }
-
-    activeDocument.addEventListener("pointermove", onPointerMove)
-    activeDocument.addEventListener("pointerup", onPointerUp)
-  }
-
-  private getChoiceIndex(sourceNode: CanvasNode, choiceId: string): number {
-    const data = sourceNode.getData() as CanvasNodeDataWithDialogue
-    const choices = data["x-dialogue"]?.frame?.choices ?? []
-    return choices.findIndex(choice => choice?.choiceId === choiceId)
-  }
-
-  private drawChoiceDragPath(event: PointerEvent) {
-    const drag = this.choiceDrag
-    if (!drag) {
-      return
-    }
-    const cursorPos = drag.canvas.posFromEvt(event)
-    const anchor = this.getChoiceAnchor(drag.canvas, drag.sourceNode, drag.choiceId, drag.outcome)
-    const path = this.buildBezierPath(anchor, cursorPos, "right", "left")
-    drag.edge.path.display.setAttr("d", path)
-    drag.edge.path.interaction.setAttr("d", path)
-  }
-
-  private finishChoiceDrag(event: PointerEvent) {
-    const drag = this.choiceDrag
-    this.choiceDrag = null
-    if (!drag) {
+    const edgeData = edge.getData() as CanvasEdgeDataWithDialogue
+    if (edgeData.fromNode !== pending.sourceNodeId) {
+      // Not the edge from our drag (e.g. an unrelated edge was created) — leave the pending intact
+      // in case ours arrives next, but if it's clearly different, clear it.
       return
     }
 
-    const { canvas, sourceNode, choiceId, outcome, edge } = drag
-    const dropPos = canvas.posFromEvt(event)
-    const targetNode = this.findNodeAt(canvas, dropPos, sourceNode)
+    this.pendingChoiceRoute = null
 
-    if (targetNode) {
-      // Commit the route onto the existing temp edge, rewired to the target node.
-      const edgeData = edge.getData() as CanvasEdgeDataWithDialogue
-      const targetSide = this.bestSideFor(canvas, targetNode, dropPos)
-      const committed: CanvasEdgeDataWithDialogue = {
-        ...edgeData,
-        toNode: targetNode.getData().id,
-        toSide: targetSide,
-      }
-      edge.setData(committed)
-      canvas.pushHistory(canvas.getData())
-      this.plugin.app.workspace.trigger("advanced-canvas:dialogue-choice-route-changed", canvas, sourceNode)
-      this.scheduleRenderCanvas(canvas)
-    } else {
-      // Empty space: cancel the choice drag for now (drop-to-spawn from a choice port requires
-      // reworking spawnNodeAtDrop to reuse this temp edge — tracked as a follow-up). Remove the
-      // dangling temp edge so the canvas stays clean.
-      canvas.removeEdge(edge)
-      canvas.pushHistory(canvas.getData())
+    const sourceNode = canvas.nodes.get(pending.sourceNodeId)
+    if (!sourceNode) {
+      return
     }
-  }
 
-  // LLM agent change: find the topmost node (excluding the source) whose bbox contains a point.
-  private findNodeAt(canvas: Canvas, point: Position, exclude: CanvasNode): CanvasNode | null {
-    const excludeId = exclude.getData().id
-    let hit: CanvasNode | null = null
-    for (const node of canvas.nodes.values()) {
-      const data = node.getData()
-      if (data.id === excludeId) {
-        continue
-      }
-      const x = data.x
-      const y = data.y
-      const width = data.width
-      const height = data.height
-      if (x === undefined || y === undefined || width === undefined || height === undefined) {
-        continue
-      }
-      if (point.x >= x && point.x <= x + width && point.y >= y && point.y <= y + height) {
-        hit = node
-      }
+    const route: DialogueChoiceRouteData = {
+      type: "choice",
+      choiceId: pending.choiceId,
+      outcome: pending.outcome,
     }
-    return hit
-  }
-
-  // LLM agent change: pick the side of the target node closest to the drop point, so the route
-  // enters the node from a sensible side.
-  private bestSideFor(canvas: Canvas, targetNode: CanvasNode, point: Position): Side {
-    const bbox = targetNode.getBBox()
-    const cx = (bbox.minX + bbox.maxX) / 2
-    const cy = (bbox.minY + bbox.maxY) / 2
-    const dx = point.x - cx
-    const dy = point.y - cy
-    if (Math.abs(dx) > Math.abs(dy)) {
-      return dx > 0 ? "right" : "left"
-    }
-    return dy > 0 ? "bottom" : "top"
+    this.saveRoute(canvas, edge, sourceNode, route)
   }
 
   private renderNodeRoutes(canvas: Canvas, node: CanvasNode) {
