@@ -159,6 +159,9 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
     choiceId: string
     outcome: DialogueChoiceRouteOutcome
   } | null = null
+  // LLM agent change: prevents multiple concurrent choice-port drags from spawning multiple drop
+  // menus. Set on pointerdown, cleared on pointerup.
+  private choiceDragInProgress = false
 
   // LLM agent change: route edges bind to numbered choices stored inside frame nodes.
   isEnabled() {
@@ -630,6 +633,22 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
     outcome: DialogueChoiceRouteOutcome,
     startEvent: PointerEvent
   ) {
+    // LLM agent change: block concurrent choice-port drags — otherwise each port click stacked
+    // another native drag + drop menu.
+    if (this.choiceDragInProgress) {
+      return
+    }
+    this.choiceDragInProgress = true
+
+    const reset = () => {
+      // If the native drag produced no edge (e.g. released on empty space with no spawn chosen),
+      // drop the pending binding so it doesn't leak into the next unrelated edge creation.
+      this.pendingChoiceRoute = null
+      this.choiceDragInProgress = false
+      activeDocument.removeEventListener("pointerup", reset)
+    }
+    activeDocument.addEventListener("pointerup", reset)
+
     this.pendingChoiceRoute = {
       sourceNodeId: sourceNode.getData().id,
       choiceId,
@@ -658,6 +677,9 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
     }
 
     this.pendingChoiceRoute = null
+    // The drag produced an edge and we bound it — clear the in-progress flag so the pointerup
+    // reset doesn't double-clear, and so the next drag can start.
+    this.choiceDragInProgress = false
 
     const sourceNode = canvas.nodes.get(pending.sourceNodeId)
     if (!sourceNode) {
