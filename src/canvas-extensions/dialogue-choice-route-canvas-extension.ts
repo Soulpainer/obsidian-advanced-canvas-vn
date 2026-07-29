@@ -170,11 +170,22 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
     // changes), and 'edge-rendered:after' fires for each. Calling renderRouteEdge synchronously
     // on every fire forced a getBoundingClientRect read each time -> layout thrashing -> visible
     // lag whenever the cursor sat over an edge. Coalesce into the rAF-scheduled full-canvas render
-    // (scheduleRenderCanvas dedupes to one frame per canvas), so many edge-rendered events in a
+    // (scheduleRenderCanvas dedupes to one frame per canvas), so many edge-render events in a
     // single frame collapse into a single route re-render.
+    //
+    // Additional guard: route paths are authored in canvas (world) coordinates and do NOT change
+    // when only the viewport moves (pan/zoom). The hovered edge re-renders constantly while
+    // panning with the cursor over it, which would otherwise re-run getBoundingClientRect every
+    // frame. Skip the re-render entirely while the viewport is changing — the native edge path
+    // keeps following the pan, and our path stays correct in world space.
     this.plugin.registerEvent(this.plugin.app.workspace.on(
       "advanced-canvas:edge-rendered:after",
-      rerender
+      (canvas: Canvas) => {
+        if (canvas.viewportChanged || canvas.isDragging) {
+          return
+        }
+        this.scheduleRenderCanvas(canvas)
+      }
     ))
     this.plugin.registerEvent(this.plugin.app.workspace.on(
       "advanced-canvas:dialogue-frame-rendered",
