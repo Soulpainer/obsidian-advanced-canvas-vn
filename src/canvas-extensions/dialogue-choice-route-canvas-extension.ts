@@ -636,51 +636,80 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
     }
 
     const sourceNodeId = sourceNode.getData().id
-    const tempEdgeId = `choice-drag-${sourceNodeId}-${choiceId}-${Date.now()}`
     const choiceIndex = this.getChoiceIndex(sourceNode, choiceId)
+    const dragThreshold = 4 // px of pointer movement before we treat it as a drag, not a click
 
-    // Create a temp edge already bound to the choice (so route styling applies during the drag).
-    // toNode points back at the source for now; we'll rewire on drop.
-    const tempEdgeData = {
-      id: tempEdgeId,
-      fromNode: sourceNodeId,
-      fromSide: "right" as Side,
-      toNode: sourceNodeId,
-      toSide: "right" as Side,
-      color: this.getRouteCanvasColorId(Math.max(choiceIndex, 0)),
-      ["x-dialogue"]: {
-        route: { type: "choice", choiceId, outcome },
-      },
-    }
-    canvas.importData({ nodes: [], edges: [tempEdgeData] }, false, false)
+    // LLM agent change: do NOT create the temp edge on pointerdown — a plain click would leave a
+    // self-looping edge on the source. Create it lazily once the pointer moves past a small
+    // threshold (a real drag). Track creation state explicitly so cleanup always removes listeners.
+    let edge: CanvasEdge | null = null
+    let edgeCreated = false
 
-    const edge = canvas.edges.get(tempEdgeId)
-    if (!edge) {
-      return
-    }
-    if (outcome === "failure") {
-      edge.path.display.setAttr("data-path", "short-dashed")
-      edge.path.interaction.setAttr("data-path", "short-dashed")
-    }
-    this.applyEdgeColor(edge, this.getRouteColorCss(choiceIndex, outcome))
+    const ensureEdge = () => {
+      if (edgeCreated) {
+        return
+      }
+      edgeCreated = true
 
-    this.choiceDrag = { canvas, sourceNode, choiceId, outcome, edge, lastPointerEvent: startEvent }
+      const tempEdgeId = `choice-drag-${sourceNodeId}-${choiceId}-${Date.now()}`
+      const tempEdgeData = {
+        id: tempEdgeId,
+        fromNode: sourceNodeId,
+        fromSide: "right" as Side,
+        toNode: sourceNodeId,
+        toSide: "right" as Side,
+        color: this.getRouteCanvasColorId(Math.max(choiceIndex, 0)),
+        ["x-dialogue"]: {
+          route: { type: "choice", choiceId, outcome },
+        },
+      }
+      canvas.importData({ nodes: [], edges: [tempEdgeData] }, false, false)
+
+      edge = canvas.edges.get(tempEdgeId) ?? null
+      if (!edge) {
+        return
+      }
+      if (outcome === "failure") {
+        edge.path.display.setAttr("data-path", "short-dashed")
+        edge.path.interaction.setAttr("data-path", "short-dashed")
+      }
+      this.applyEdgeColor(edge, this.getRouteColorCss(choiceIndex, outcome))
+
+      this.choiceDrag = {
+        canvas,
+        sourceNode,
+        choiceId,
+        outcome,
+        edge,
+        lastPointerEvent: startEvent,
+      }
+    }
 
     const onPointerMove = (moveEvent: PointerEvent) => {
-      this.choiceDrag = { ...this.choiceDrag!, lastPointerEvent: moveEvent }
+      const dx = moveEvent.clientX - startEvent.clientX
+      const dy = moveEvent.clientY - startEvent.clientY
+      if (Math.hypot(dx, dy) < dragThreshold) {
+        return
+      }
+      ensureEdge()
+      if (!this.choiceDrag || !edge) {
+        return
+      }
+      this.choiceDrag = { ...this.choiceDrag, lastPointerEvent: moveEvent }
       this.drawChoiceDragPath(moveEvent)
     }
     const onPointerUp = (upEvent: PointerEvent) => {
       activeDocument.removeEventListener("pointermove", onPointerMove)
       activeDocument.removeEventListener("pointerup", onPointerUp)
-      this.finishChoiceDrag(upEvent)
+      // Only finalize if an edge was actually created (i.e. a real drag happened). A plain click
+      // leaves nothing behind.
+      if (edge) {
+        this.finishChoiceDrag(upEvent)
+      }
     }
 
     activeDocument.addEventListener("pointermove", onPointerMove)
     activeDocument.addEventListener("pointerup", onPointerUp)
-
-    // Draw the initial segment immediately.
-    this.drawChoiceDragPath(startEvent)
   }
 
   private getChoiceIndex(sourceNode: CanvasNode, choiceId: string): number {
