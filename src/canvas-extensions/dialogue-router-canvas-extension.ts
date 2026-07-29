@@ -31,6 +31,10 @@ export default class DialogueRouterCanvasExtension extends CanvasExtension {
   private menuObserver: MutationObserver | null = null
   private lastContextMenuRequest: { canvas: Canvas, position: Position } | null = null
   private lastInteractionNode: CanvasNode | null = null
+  // LLM agent change: set when a drag-to-spawn is about to show our spawn menu. The native
+  // 'canvas:node-connection-drop-menu' handler checks this to suppress Obsidian's own drop menu
+  // (otherwise both menus appear at once for dialogue nodes).
+  private suppressNativeDropMenu = false
 
   isEnabled() {
     return true
@@ -99,6 +103,19 @@ export default class DialogueRouterCanvasExtension extends CanvasExtension {
       "advanced-canvas:edge-connection-dragging:after",
       (canvas: Canvas, edge: CanvasEdge, event: PointerEvent, newEdge: boolean, side: "from" | "to") =>
         this.onEdgeConnectionDrop(canvas, edge, event, newEdge, side)
+    ))
+
+    // LLM agent change: suppress Obsidian's own connection-drop menu when we're about to show our
+    // spawn menu (raised in onEdgeConnectionDrop for dialogue-node sources). Without this, both
+    // menus appear at the drop location at the same time.
+    this.plugin.registerEvent(this.plugin.app.workspace.on(
+      "canvas:node-connection-drop-menu",
+      (menu: Menu) => {
+        if (this.suppressNativeDropMenu) {
+          menu.hide()
+          this.suppressNativeDropMenu = false
+        }
+      }
     ))
 
     this.plugin.registerEvent(this.plugin.app.workspace.on(
@@ -335,6 +352,11 @@ export default class DialogueRouterCanvasExtension extends CanvasExtension {
     const screenY = event.clientY
     const sourceNodeId = sourceNode.getData().id
 
+    // LLM agent change: raise the suppress flag BEFORE Obsidian builds its native drop menu. The
+    // canvas:node-connection-drop-menu listener will see this and close the native menu; our own
+    // spawn menu is shown right after.
+    this.suppressNativeDropMenu = true
+
     // LLM agent change: defer the menu to the next tick. Showing it synchronously inside the
     // pointerup handler lets the rest of Obsidian's drag-finalization (which can emit a stray
     // click / close-overlays call) dismiss the menu instantly. A 0ms timeout yields first so the
@@ -354,6 +376,9 @@ export default class DialogueRouterCanvasExtension extends CanvasExtension {
             .onClick(() => this.spawnNodeAtDrop(canvas, sourceNodeId, dropPosition, "router"))
         })
         .showAtPosition({ x: screenX, y: screenY })
+
+      // Reset shortly after, so the flag doesn't leak into an unrelated later drop.
+      window.setTimeout(() => { this.suppressNativeDropMenu = false }, 100)
     }, 0)
   }
 
