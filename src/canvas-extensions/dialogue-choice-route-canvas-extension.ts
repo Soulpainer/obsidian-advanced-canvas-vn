@@ -197,7 +197,12 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
           this.drawChoiceDragPath(this.choiceDrag.lastPointerEvent)
           return
         }
+        // LLM agent change: re-render synchronously so our path is the last write in the frame
+        // (native edge.render rewrites the path on node move/resize). renderRouteEdge handles
+        // choice-route edges; renderDefaultEdgeFromFrameRight re-anchors non-route edges leaving
+        // a choice frame's right side (otherwise they snap back to the side center).
         this.renderRouteEdge(canvas, edge)
+        this.renderDefaultEdgeFromFrameRight(canvas, edge)
       }
     ))
     this.plugin.registerEvent(this.plugin.app.workspace.on(
