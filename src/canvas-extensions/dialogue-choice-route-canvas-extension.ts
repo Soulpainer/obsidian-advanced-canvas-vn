@@ -133,12 +133,12 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
   private readonly choicesTopGap = 12
   // LLM agent change: real measured choice-row geometry (border-box, from a rendered node).
   // A row without a failure sub-block is 22px tall; a failure sub-block adds 30px (so a row with
-  // failure is 52px). The success port sits at the row's vertical center (11px from the row top);
-  // the failure port sits 38px from the row top. These come from measuring offsetTop/offsetHeight
-  // of a rendered choice-list and matching against real canvas-Y anchors.
+  // failure is 52px). The success port sits at the row's vertical center (CSS top: 50%), so its
+  // offset is half the row height (11px without failure, 26px with). The failure port sits 38px
+  // from the row top (failTop 28 + half of failH 20). These come from measuring a rendered
+  // choice-list and matching against real canvas-Y anchors.
   private readonly choiceRowHeight = 22
   private readonly choiceFailureRowHeight = 30
-  private readonly choiceSuccessRowCenter = 11
   private readonly choiceFailureRowCenter = 38
   private readonly choicesBottomPadding = 12
   // LLM agent change: these Maps are declared WITHOUT initializers and created in init().
@@ -624,9 +624,16 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
 
     const listTopY = bbox.maxY - listBottomPadding - listHeight
 
-    // LLM agent change: measured row-relative port centers (see constants above): success port
-    // at 11px from the row top, failure port at 38px from the row top.
-    const yOffsetInRow = outcome === "failure" ? this.choiceFailureRowCenter : this.choiceSuccessRowCenter
+    // LLM agent change: measured row-relative port centers (see constants above). The success
+    // port sits at the row's vertical center (CSS top: 50%), so for a row WITHOUT failure it is
+    // choiceSuccessRowCenter (11px = half of 22); for a row WITH failure the row is 52px tall
+    // (22 + failure block 30) and the center is 26px. The failure port is always 38px from the
+    // row top (failTop 28 + half of failH 20).
+    const targetChoice = choices[targetIndex]
+    const targetRowHeight = this.choiceRowHeight + (targetChoice && this.choiceHasFailureSlot(targetChoice) ? this.choiceFailureRowHeight : 0)
+    const yOffsetInRow = outcome === "failure"
+      ? this.choiceFailureRowCenter
+      : targetRowHeight / 2
 
     return {
       x: nodeRightX,
