@@ -148,6 +148,18 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
   // renderFrames.has(). Creating them at the top of init() is the safe ordering.
   private renderFrames!: WeakMap<Canvas, number>
   private activePointerRenderStops!: WeakMap<Canvas, () => void>
+  // LLM agent change: choice ports we've already attached a custom drag pointerdown handler to,
+  // so re-rendering a node doesn't double-bind. Re-checked against the live DOM on every render.
+  private wiredChoicePorts!: WeakSet<HTMLElement>
+  // LLM agent change: in-progress choice-drag state. Set on choice-port pointerdown, cleared on
+  // pointerup. Holds the temp edge being dragged from a choice port.
+  private choiceDrag: {
+    canvas: Canvas
+    sourceNode: CanvasNode
+    choiceId: string
+    outcome: DialogueChoiceRouteOutcome
+    edge: CanvasEdge
+  } | null = null
 
   // LLM agent change: route edges bind to numbered choices stored inside frame nodes.
   isEnabled() {
@@ -159,6 +171,7 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
     // (see the field declaration comment above for why this ordering matters).
     this.renderFrames = new WeakMap<Canvas, number>()
     this.activePointerRenderStops = new WeakMap<Canvas, () => void>()
+    this.wiredChoicePorts = new WeakSet<HTMLElement>()
 
     this.plugin.registerEvent(this.plugin.app.workspace.on(
       "advanced-canvas:popup-menu-created",
@@ -211,6 +224,16 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
   // becomes a proper route immediately. Edges from non-frame sources or frames without choices
   // are left as plain connections.
   private onEdgeNeedsRoute(canvas: Canvas, edge: CanvasEdge, sourceNode: CanvasNode) {
+    const edgeData = edge.getData() as CanvasEdgeDataWithDialogue
+    const existingRoute = this.getChoiceRoute(edgeData["x-dialogue"]?.route)
+
+    // LLM agent change: if the edge already has a route (e.g. it was dragged from a choice port),
+    // there is nothing to prompt for — just keep the binding and re-render.
+    if (existingRoute) {
+      this.scheduleRenderCanvas(canvas)
+      return
+    }
+
     const sourceNodeData = sourceNode.getData() as CanvasNodeDataWithDialogue
     const choices = sourceNodeData["x-dialogue"]?.frame?.choices ?? []
 
@@ -465,6 +488,196 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
       // LLM agent change: refresh choice edges immediately after their source frame DOM exists.
       this.renderRouteEdge(canvas, edge)
     }
+
+    // LLM agent change: (re)attach custom drag handlers to choice ports on this node. Re-runs on
+    // every render because Obsidian can rebuild the node DOM.
+    this.wireChoicePortDragHandlers(canvas, sourceNode)
+  }
+
+  // LLM agent change: attach pointerdown handlers to each choice port on the node so the user can
+  // drag a brand-new edge straight from a specific choice (auto-binding it). Uses a WeakSet to
+  // avoid double-binding on repeated renders.
+  private wireChoicePortDragHandlers(canvas: Canvas, sourceNode: CanvasNode) {
+    const nodeEl = this.getNodeElement(sourceNode)
+    if (!nodeEl) {
+      return
+    }
+
+    const ports = Array.from(nodeEl.querySelectorAll<HTMLElement>(
+      ".dialogue-canvas-choice-swatch, .dialogue-canvas-choice-failure-port"
+    ))
+
+    for (const portEl of ports) {
+      if (this.wiredChoicePorts.has(portEl)) {
+        continue
+      }
+      this.wiredChoicePorts.add(portEl)
+
+      portEl.style.cursor = "crosshair"
+
+      portEl.addEventListener("pointerdown", (event: PointerEvent) => {
+        event.preventDefault()
+        event.stopPropagation()
+
+        const choiceId = portEl.dataset.dialogueChoiceId
+        const outcome = (portEl.dataset.dialogueChoiceOutcome ?? "success") as DialogueChoiceRouteOutcome
+        if (!choiceId) {
+          return
+        }
+
+        this.startChoiceDrag(canvas, sourceNode, choiceId, outcome, event)
+      })
+    }
+  }
+
+  // LLM agent change: drive a custom edge drag starting from a choice port. Creates a temporary
+  // edge (toNode = source node) already bound to the choice, draws its path from the choice anchor
+  // to the cursor on every pointermove, and on pointerup either re-targets it to the node under
+  // the cursor (committing the route) or offers the spawn menu (for empty space).
+  private startChoiceDrag(
+    canvas: Canvas,
+    sourceNode: CanvasNode,
+    choiceId: string,
+    outcome: DialogueChoiceRouteOutcome,
+    startEvent: PointerEvent
+  ) {
+    if (canvas.readonly) {
+      return
+    }
+
+    const sourceNodeId = sourceNode.getData().id
+    const tempEdgeId = `choice-drag-${sourceNodeId}-${choiceId}-${Date.now()}`
+    const choiceIndex = this.getChoiceIndex(sourceNode, choiceId)
+
+    // Create a temp edge already bound to the choice (so route styling applies during the drag).
+    // toNode points back at the source for now; we'll rewire on drop.
+    const tempEdgeData = {
+      id: tempEdgeId,
+      fromNode: sourceNodeId,
+      fromSide: "right" as Side,
+      toNode: sourceNodeId,
+      toSide: "right" as Side,
+      color: this.getRouteCanvasColorId(Math.max(choiceIndex, 0)),
+      ["x-dialogue"]: {
+        route: { type: "choice", choiceId, outcome },
+      },
+    }
+    canvas.importData({ nodes: [], edges: [tempEdgeData] }, false, false)
+
+    const edge = canvas.edges.get(tempEdgeId)
+    if (!edge) {
+      return
+    }
+    if (outcome === "failure") {
+      edge.path.display.setAttr("data-path", "short-dashed")
+      edge.path.interaction.setAttr("data-path", "short-dashed")
+    }
+    this.applyEdgeColor(edge, this.getRouteColorCss(choiceIndex, outcome))
+
+    this.choiceDrag = { canvas, sourceNode, choiceId, outcome, edge }
+
+    const onPointerMove = (moveEvent: PointerEvent) => {
+      this.drawChoiceDragPath(moveEvent)
+    }
+    const onPointerUp = (upEvent: PointerEvent) => {
+      activeDocument.removeEventListener("pointermove", onPointerMove)
+      activeDocument.removeEventListener("pointerup", onPointerUp)
+      this.finishChoiceDrag(upEvent)
+    }
+
+    activeDocument.addEventListener("pointermove", onPointerMove)
+    activeDocument.addEventListener("pointerup", onPointerUp)
+
+    // Draw the initial segment immediately.
+    this.drawChoiceDragPath(startEvent)
+  }
+
+  private getChoiceIndex(sourceNode: CanvasNode, choiceId: string): number {
+    const data = sourceNode.getData() as CanvasNodeDataWithDialogue
+    const choices = data["x-dialogue"]?.frame?.choices ?? []
+    return choices.findIndex(choice => choice?.choiceId === choiceId)
+  }
+
+  private drawChoiceDragPath(event: PointerEvent) {
+    const drag = this.choiceDrag
+    if (!drag) {
+      return
+    }
+    const cursorPos = drag.canvas.posFromEvt(event)
+    const anchor = this.getChoiceAnchor(drag.canvas, drag.sourceNode, drag.choiceId, drag.outcome)
+    const path = this.buildBezierPath(anchor, cursorPos, "right", "left")
+    drag.edge.path.display.setAttr("d", path)
+    drag.edge.path.interaction.setAttr("d", path)
+  }
+
+  private finishChoiceDrag(event: PointerEvent) {
+    const drag = this.choiceDrag
+    this.choiceDrag = null
+    if (!drag) {
+      return
+    }
+
+    const { canvas, sourceNode, choiceId, outcome, edge } = drag
+    const dropPos = canvas.posFromEvt(event)
+    const targetNode = this.findNodeAt(canvas, dropPos, sourceNode)
+
+    if (targetNode) {
+      // Commit the route onto the existing temp edge, rewired to the target node.
+      const edgeData = edge.getData() as CanvasEdgeDataWithDialogue
+      const targetSide = this.bestSideFor(canvas, targetNode, dropPos)
+      const committed: CanvasEdgeDataWithDialogue = {
+        ...edgeData,
+        toNode: targetNode.getData().id,
+        toSide: targetSide,
+      }
+      edge.setData(committed)
+      canvas.pushHistory(canvas.getData())
+      this.plugin.app.workspace.trigger("advanced-canvas:dialogue-choice-route-changed", canvas, sourceNode)
+      this.scheduleRenderCanvas(canvas)
+    } else {
+      // Empty space: cancel the choice drag for now (drop-to-spawn from a choice port requires
+      // reworking spawnNodeAtDrop to reuse this temp edge — tracked as a follow-up). Remove the
+      // dangling temp edge so the canvas stays clean.
+      canvas.removeEdge(edge)
+      canvas.pushHistory(canvas.getData())
+    }
+  }
+
+  // LLM agent change: find the topmost node (excluding the source) whose bbox contains a point.
+  private findNodeAt(canvas: Canvas, point: Position, exclude: CanvasNode): CanvasNode | null {
+    const excludeId = exclude.getData().id
+    let hit: CanvasNode | null = null
+    for (const node of canvas.nodes.values()) {
+      const data = node.getData()
+      if (data.id === excludeId) {
+        continue
+      }
+      const x = data.x
+      const y = data.y
+      const width = data.width
+      const height = data.height
+      if (x === undefined || y === undefined || width === undefined || height === undefined) {
+        continue
+      }
+      if (point.x >= x && point.x <= x + width && point.y >= y && point.y <= y + height) {
+        hit = node
+      }
+    }
+    return hit
+  }
+
+  // LLM agent change: pick the side of the target node closest to the drop point, so the route
+  // enters the node from a sensible side.
+  private bestSideFor(canvas: Canvas, targetNode: CanvasNode, point: Position): Side {
+    const bbox = targetNode.getBBox()
+    const cx = (bbox.minX + bbox.maxX) / 2
+    const cy = (bbox.minY + bbox.maxY) / 2
+    const dx = point.x - cx
+    const dy = point.y - cy
+    if (Math.abs(dx) > Math.abs(dy)) {
+      return dx > 0 ? "right" : "left"
+    }
+    return dy > 0 ? "bottom" : "top"
   }
 
   private renderNodeRoutes(canvas: Canvas, node: CanvasNode) {
