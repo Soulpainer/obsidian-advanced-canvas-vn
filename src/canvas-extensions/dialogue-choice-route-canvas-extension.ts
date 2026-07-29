@@ -481,10 +481,52 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
 
       if (!this.getChoiceRoute(edgeData["x-dialogue"]?.route)) {
         this.setEdgeLabelVisible(edge, true)
+        // LLM agent change: default (non-route) edges that leave a choice frame from its right
+        // side are re-anchored to the upper quarter of that side, where the visible default
+        // connection point lives (the choice ports occupy the lower part). Without this the line
+        // would start at the side center while the dot shows at the top — out of sync.
+        this.renderDefaultEdgeFromFrameRight(canvas, edge)
         continue
       }
 
       this.renderRouteEdge(canvas, edge)
+    }
+  }
+
+  // LLM agent change: re-anchor a non-route edge that leaves a dialogue frame with choices from
+  // its right side, so the line starts at the upper quarter of the right edge (matching the
+  // shifted default connection point) instead of the geometric center.
+  private renderDefaultEdgeFromFrameRight(canvas: Canvas, edge: CanvasEdge) {
+    const edgeData = edge.getData() as CanvasEdgeDataWithDialogue
+    if (edgeData.fromSide !== "right" || !edge.bezier || !edgeData.fromNode) {
+      return
+    }
+
+    const sourceNode = canvas.nodes.get(edgeData.fromNode)
+    if (!sourceNode) {
+      return
+    }
+    const sourceNodeData = sourceNode.getData() as CanvasNodeDataWithDialogue
+    const choices = sourceNodeData["x-dialogue"]?.frame?.choices
+    if (!Array.isArray(choices) || choices.length === 0) {
+      return
+    }
+
+    const anchor = this.getFrameRightDefaultAnchor(sourceNode)
+    const target = this.getEdgeTargetAnchor(canvas, edge, edgeData)
+    const path = this.buildBezierPath(anchor, target, "right", edge.to.side)
+
+    edge.path.display.setAttr("d", path)
+    edge.path.interaction.setAttr("d", path)
+  }
+
+  // LLM agent change: anchor at the upper quarter of a frame's right edge (matches the CSS-shifted
+  // default connection point at top: 25%).
+  private getFrameRightDefaultAnchor(sourceNode: CanvasNode): Position {
+    const bbox = sourceNode.getBBox()
+    return {
+      x: bbox.maxX,
+      y: bbox.minY + (bbox.maxY - bbox.minY) * 0.25,
     }
   }
 
