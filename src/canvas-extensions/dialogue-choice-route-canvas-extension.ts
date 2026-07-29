@@ -659,10 +659,11 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
     this.choiceDragInProgress = true
 
     const reset = () => {
-      // If the native drag produced no edge (e.g. released on empty space with no spawn chosen),
-      // drop the pending binding so it doesn't leak into the next unrelated edge creation.
+      // LLM agent change: do NOT clear choiceDragInProgress here. The native connection-drop
+      // menu fires AFTER pointerup, and our drop-menu handler needs the flag to hide the spawn
+      // menu (drop-to-empty isn't supported for choice drags). It clears the flag there. We only
+      // clear pendingChoiceRoute here so it can't leak if the drag produced no edge.
       this.pendingChoiceRoute = null
-      this.choiceDragInProgress = false
       activeDocument.removeEventListener("pointerup", reset)
     }
     activeDocument.addEventListener("pointerup", reset)
