@@ -4,7 +4,7 @@
 /* eslint-disable @typescript-eslint/no-unsafe-argument -- LLM agent change: Obsidian Canvas internals are partially untyped. */
 /* eslint-disable @typescript-eslint/no-unsafe-return -- LLM agent change: Obsidian Canvas internals are partially untyped. */
 /* eslint-disable @typescript-eslint/no-unnecessary-type-assertion -- LLM agent change: explicit Canvas DOM assertions keep intent visible. */
-import { ButtonComponent, Menu, Modal, Notice, Setting } from "obsidian"
+import { ButtonComponent, Modal, Notice, Setting } from "obsidian"
 import { Side } from "src/@types/AdvancedJsonCanvas"
 import { Canvas, CanvasEdge, CanvasElement, CanvasNode, Position, Size } from "src/@types/Canvas"
 import {
@@ -221,23 +221,14 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
     ))
     this.plugin.registerEvent(this.plugin.app.workspace.on(
       "advanced-canvas:edge-connection-dragging:before",
-      (canvas: Canvas) => this.renderWhilePointerMoves(canvas)
-    ))
-    // LLM agent change: when a choice-port drag ends on empty space, Obsidian shows the native
-    // connection-drop menu — but our router's spawn items don't work there (the native dragged
-    // edge conflicts with the spawn edge), and the menu stacked on repeated attempts. Until
-    // drop-to-spawn is properly supported for choice drags, hide the menu's items during a choice
-    // drag so the user just gets a clean cancellation.
-    this.plugin.registerEvent(this.plugin.app.workspace.on(
-      "canvas:node-connection-drop-menu",
-      (menu: Menu) => {
-        if (this.choiceDragInProgress) {
-          // Hide the spawn menu during a choice-port drag (drop-to-spawn isn't supported for
-          // choice drags yet — it conflicts with the native dragged edge — and the menu stacked
-          // on repeated attempts). Clear our drag state so the next drag starts fresh.
-          menu.hide()
-          this.pendingChoiceRoute = null
-          this.choiceDragInProgress = false
+      (canvas: Canvas) => {
+        this.renderWhilePointerMoves(canvas)
+        // LLM agent change: mark the canvas while a choice-port drag is in progress, so the router
+        // extension can skip adding its spawn-menu items (drop-to-empty isn't supported for choice
+        // drags — it conflicts with the native dragged edge). Router reads this dataset in its
+        // connection-drop-menu handler.
+        if (this.choiceDragInProgress && canvas.wrapperEl) {
+          canvas.wrapperEl.dataset.dialogueChoiceDrag = "true"
         }
       }
     ))
@@ -660,9 +651,11 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
 
     const reset = () => {
       // LLM agent change: do NOT clear choiceDragInProgress here. The native connection-drop
-      // menu fires AFTER pointerup, and our drop-menu handler needs the flag to hide the spawn
-      // menu (drop-to-empty isn't supported for choice drags). It clears the flag there. We only
-      // clear pendingChoiceRoute here so it can't leak if the drag produced no edge.
+      // menu fires AFTER pointerup, and the router reads canvas.wrapperEl.dataset.dialogueChoiceDrag
+      // to skip its spawn items. We clear the flag (and the dataset) in onEdgeCreatedFromChoicePort
+      // (drop on target) — but for a drop on empty space the flag stays set until the next
+      // interaction; that's fine because the router has already decided not to add items by then.
+      // We only clear pendingChoiceRoute here so it can't leak if the drag produced no edge.
       this.pendingChoiceRoute = null
       activeDocument.removeEventListener("pointerup", reset)
     }
@@ -699,6 +692,7 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
     // The drag produced an edge and we bound it — clear the in-progress flag so the pointerup
     // reset doesn't double-clear, and so the next drag can start.
     this.choiceDragInProgress = false
+    canvas.wrapperEl?.removeAttribute("data-dialogue-choice-drag")
 
     const sourceNode = canvas.nodes.get(pending.sourceNodeId)
     if (!sourceNode) {
