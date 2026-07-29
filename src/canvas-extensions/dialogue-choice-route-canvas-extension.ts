@@ -165,21 +165,22 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
       (canvas: Canvas) => this.onPopupMenuCreated(canvas)
     ))
 
-    const rerender = (canvas: Canvas) => this.scheduleRenderCanvas(canvas)
-    // LLM agent change: native edges re-render very frequently (on hover, focus, drag, viewport
-    // changes), and 'edge-rendered:after' fires for each. Calling renderRouteEdge synchronously
-    // on every fire forced a getBoundingClientRect read each time -> layout thrashing -> visible
-    // lag whenever the cursor sat over an edge. Coalesce into the rAF-scheduled full-canvas render
-    // (scheduleRenderCanvas dedupes to one frame per canvas), so many edge-render events in a
-    // single frame collapse into a single route re-render.
+    // LLM agent change: render the route edge SYNCHRONOUSLY on each native edge render, not via
+    // the rAF-coalesced scheduleRenderCanvas. Rationale: Obsidian's native edge.render() rewrites
+    // the path every time a connected node moves/resizes, and that native path collapses our
+    // route geometry. If we render our path one frame later (in rAF), the native render in the
+    // following frame overwrites it again, so the user sees the collapsed native path. Rendering
+    // synchronously here makes our path the last write in the same frame, so it sticks. This is
+    // cheap now that the anchor reads only canvas geometry (no getBoundingClientRect reflow).
     this.plugin.registerEvent(this.plugin.app.workspace.on(
       "advanced-canvas:edge-rendered:after",
-      rerender
+      (canvas: Canvas, edge: CanvasEdge) => this.renderRouteEdge(canvas, edge)
     ))
     this.plugin.registerEvent(this.plugin.app.workspace.on(
       "advanced-canvas:dialogue-frame-rendered",
       (canvas: Canvas, node: CanvasNode) => this.renderSourceNodeRoutes(canvas, node)
     ))
+    const rerender = (canvas: Canvas) => this.scheduleRenderCanvas(canvas)
     this.plugin.registerEvent(this.plugin.app.workspace.on("advanced-canvas:node-changed", rerender))
     this.plugin.registerEvent(this.plugin.app.workspace.on(
       "advanced-canvas:node-moved",
