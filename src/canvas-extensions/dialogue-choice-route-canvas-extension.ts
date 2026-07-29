@@ -531,56 +531,18 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
     choiceId: string,
     outcome: DialogueChoiceRouteOutcome
   ): Position {
-    const nodeEl = this.getNodeElement(sourceNode)
-    const portSelector = `.dialogue-canvas-choice-route-port[data-dialogue-choice-id="${this.escapeCss(choiceId)}"][data-dialogue-choice-outcome="${outcome}"]`
-    const rowSelector = outcome === "failure"
-      ? `.dialogue-canvas-choice-failure[data-dialogue-choice-id="${this.escapeCss(choiceId)}"]`
-      : `.dialogue-canvas-choice-row[data-dialogue-choice-id="${this.escapeCss(choiceId)}"]`
-    const portEl = nodeEl?.querySelector(portSelector) as HTMLElement | null
-    const anchorEl = nodeEl?.querySelector(rowSelector) as HTMLElement | null
-    const fallbackEl = nodeEl?.querySelector(
-      `.dialogue-canvas-choice-row[data-dialogue-choice-id="${this.escapeCss(choiceId)}"]`
-    ) as HTMLElement | null
-    const targetEl = portEl ?? anchorEl ?? fallbackEl
-
-    // LLM agent change: only trust the DOM rect when it is genuinely usable. Obsidian lazily
-    // renders / clips node content that scrolls outside the viewport, so getBoundingClientRect()
-    // can return zero-size or stale boxes — which made choice edges "drift" when the source node
-    // touched or crossed the canvas edge. When the rect is invalid, fall back to a geometric
-    // anchor computed from the node bbox and the choice-list layout (see getChoiceAnchorGeometric).
-    if (targetEl && this.isDomAnchorUsable(canvas, sourceNode, targetEl)) {
-      const rect = targetEl.getBoundingClientRect()
-      const viewportAnchor = canvas.posFromClient({
-        x: portEl ? rect.left + rect.width / 2 : rect.right,
-        y: rect.top + rect.height / 2,
-      })
-
-      return viewportAnchor
-    }
-
+    // LLM agent change: anchor purely from canvas geometry, not from getBoundingClientRect().
+    // The viewport-based rect read (posFromClient) was stale during drag/resize — the DOM hadn't
+    // re-rendered yet while canvas bbox already reflected the move — which collapsed routes into a
+    // point. The target anchor already used getBBox (live geometry); now the source anchor does
+    // too, so both track the move synchronously. The geometric layout below is calibrated to the
+    // real choice-list CSS (22px rows, 30px failure blocks, 11/38px port centers).
     const sourceNodeData = sourceNode.getData() as CanvasNodeDataWithDialogue
     const choices = sourceNodeData["x-dialogue"]?.frame?.choices ?? []
     return this.getChoiceAnchorGeometric(sourceNode, choices, choiceId, outcome)
   }
 
-  // LLM agent change: heuristic deciding whether a DOM anchor's bounding rect is trustworthy.
-  // Returns false when the rect is zero-size or when the source node is outside the current
-  // viewport (Obsidian may have un-rendered or clipped its inner DOM in that case).
-  private isDomAnchorUsable(canvas: Canvas, sourceNode: CanvasNode, targetEl: HTMLElement): boolean {
-    const rect = targetEl.getBoundingClientRect()
-    if (rect.width === 0 || rect.height === 0) {
-      return false
-    }
-
-    const viewport = canvas.getViewportBBox()
-    const nodeBbox = sourceNode.getBBox()
-    // Allow partial overlap; only distrust when the node is entirely off-screen.
-    const horizontallyOff = nodeBbox.maxX < viewport.minX || nodeBbox.minX > viewport.maxX
-    const verticallyOff = nodeBbox.maxY < viewport.minY || nodeBbox.minY > viewport.maxY
-    return !(horizontallyOff || verticallyOff)
-  }
-
-  // LLM agent change: geometric fallback for getChoiceAnchor. Mirrors the choice-list layout
+  // LLM agent change: geometric anchor for a choice port. Mirrors the choice-list layout
   // (see DialogueFrameCanvasExtension.renderChoices and the .dialogue-canvas-choice-list CSS):
   // the list is anchored to the bottom of the node (8px padding) and stacks choice rows from
   // the top, each row being choiceRowHeight tall with an extra choiceFailureRowHeight block for
