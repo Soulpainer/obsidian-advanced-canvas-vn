@@ -457,6 +457,16 @@ export default class DialogueRouterCanvasExtension extends CanvasExtension {
     // For frames, open the editor (mirrors createDialogueFrameNode). Routers render via the
     // node-added/node-changed listeners.
     if (kind === "frame") {
+      // LLM agent change: mark this node as freshly spawned (with its connecting edge) BEFORE
+      // opening the editor, so the frame extension can remove both if the user cancels.
+      if (createdEdge) {
+        this.plugin.app.workspace.trigger(
+          "advanced-canvas:dialogue-node-spawned",
+          canvas,
+          node.getData().id,
+          createdEdge.getData().id
+        )
+      }
       this.plugin.app.workspace.trigger("advanced-canvas:dialogue-frame-edit-requested", canvas, node)
     } else {
       this.renderRouterNode(canvas, node)

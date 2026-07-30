@@ -43,6 +43,10 @@ export default class DialogueFrameCanvasExtension extends CanvasExtension {
   // DialogueChoiceRouteCanvasExtension for the same fix and fuller explanation.
   private renderFrames!: WeakMap<Canvas, number>
   private editModalOpenNodes!: WeakSet<CanvasNode>
+  // LLM agent change: freshly-spawned frame nodes (via drag-to-spawn) whose editor is open,
+  // mapped to the edge that connects them to the source. If the user cancels the editor, both the
+  // node and the edge are removed so the canvas returns to its pre-spawn state.
+  private spawnedFrameNodes!: Map<CanvasNode, string>
 
   // Минимальная высота карточки, если у неё есть speaker.
   // Подгони под свой шаг сетки.
@@ -69,6 +73,7 @@ export default class DialogueFrameCanvasExtension extends CanvasExtension {
     // (see the field declarations above for why this ordering matters).
     this.renderFrames = new WeakMap<Canvas, number>()
     this.editModalOpenNodes = new WeakSet<CanvasNode>()
+    this.spawnedFrameNodes = new Map<CanvasNode, string>()
     this.observedCanvasWrappers = new WeakSet<HTMLElement>()
 
     console.log("[Dialogue Canvas] DialogueFrameCanvasExtension init")
@@ -116,6 +121,17 @@ export default class DialogueFrameCanvasExtension extends CanvasExtension {
     this.plugin.registerEvent(this.plugin.app.workspace.on(
       "advanced-canvas:dialogue-choice-route-changed",
       (canvas: Canvas) => this.scheduleRenderCanvas(canvas)
+    ))
+    // LLM agent change: track freshly-spawned frame nodes so we can remove them (and their edge)
+    // if the user cancels the frame editor.
+    this.plugin.registerEvent(this.plugin.app.workspace.on(
+      "advanced-canvas:dialogue-node-spawned",
+      (canvas: Canvas, nodeId: string, edgeId: string) => {
+        const node = canvas.nodes.get(nodeId)
+        if (node) {
+          this.spawnedFrameNodes.set(node, edgeId)
+        }
+      }
     ))
 
     this.scheduleRenderAllCanvases()
@@ -217,8 +233,23 @@ export default class DialogueFrameCanvasExtension extends CanvasExtension {
       onSubmit: value => {
         this.saveDialogueFrame(canvas, node, value)
       },
-      onClose: () => {
+      onClose: (wasSubmitted: boolean) => {
         this.editModalOpenNodes.delete(node)
+
+        // LLM agent change: if this was a freshly-spawned node and the user cancelled (didn't
+        // save), remove the node and its connecting edge so the canvas returns to its pre-spawn
+        // state. Only act for nodes we tracked as spawned — existing nodes are left alone.
+        const spawnedEdgeId = this.spawnedFrameNodes.get(node)
+        if (spawnedEdgeId !== undefined && !wasSubmitted) {
+          const liveCanvas = this.plugin.getCurrentCanvas()
+          const edge = liveCanvas?.edges.get(spawnedEdgeId)
+          if (edge) {
+            liveCanvas?.removeEdge(edge)
+          }
+          liveCanvas?.removeNode(node)
+          liveCanvas?.pushHistory(liveCanvas.getData())
+        }
+        this.spawnedFrameNodes.delete(node)
       },
     }).open()
   }

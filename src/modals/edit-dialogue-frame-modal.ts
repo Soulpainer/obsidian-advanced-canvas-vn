@@ -23,7 +23,9 @@ export interface EditDialogueFrameModalOptions {
   triggers: DialogueTriggerDefinition[]
   focusTarget?: DialogueFrameFocusTarget
   onSubmit: (value: DialogueFrameEditorValue) => void
-  onClose?: () => void
+  // LLM agent change: called with wasSubmitted so the caller can clean up a freshly-spawned node
+  // when the user cancelled instead of saving.
+  onClose?: (wasSubmitted: boolean) => void
 }
 
 export type DialogueFrameFocusTarget =
@@ -37,7 +39,7 @@ export default class EditDialogueFrameModal extends Modal {
   private readonly properties: DialoguePropertyDefinition[]
   private readonly triggers: DialogueTriggerDefinition[]
   private readonly onSubmitCallback: (value: DialogueFrameEditorValue) => void
-  private readonly onCloseCallback?: () => void
+  private readonly onCloseCallback?: (wasSubmitted: boolean) => void
   private pendingFocusTarget?: DialogueFrameFocusTarget
   private readonly collapsedChoiceIds = new Set<string>()
   private readonly collapsedActionIndexes = new Set<number>()
@@ -147,6 +149,8 @@ export default class EditDialogueFrameModal extends Modal {
               actions: this.getValidActions(),
             })
 
+            // LLM agent change: mark submitted before close so onClose knows this wasn't a cancel.
+            this.wasSubmitted = true
             this.close()
           })
       })
@@ -154,8 +158,14 @@ export default class EditDialogueFrameModal extends Modal {
 
   onClose() {
     this.contentEl.empty()
-    this.onCloseCallback?.()
+    // LLM agent change: pass whether the user submitted (Save) vs cancelled, so the caller can
+    // clean up a freshly-spawned node on cancel.
+    this.onCloseCallback?.(this.wasSubmitted)
   }
+
+  // LLM agent change: set to true right before close() in the Save path, so onClose can tell a
+  // cancel from a submit.
+  private wasSubmitted = false
 
   // LLM agent change: frame actions describe side effects that happen when this dialogue frame is entered.
   private renderActionsSection(contentEl: HTMLElement) {

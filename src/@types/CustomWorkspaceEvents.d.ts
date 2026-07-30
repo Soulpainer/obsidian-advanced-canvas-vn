@@ -57,6 +57,12 @@ export interface CustomWorkspaceEvents {
   /** Fired when native inline edit should be replaced by dialogue frame modal editing */
   'advanced-canvas:dialogue-frame-edit-requested': (canvas: Canvas, node: CanvasNode) => void
   /**
+   * LLM agent change: Fired after a node + its connecting edge are spawned via the drag-to-spawn
+   * menu, right before the frame editor opens. The frame extension tracks the node id so that if
+   * the user cancels the editor, the freshly-spawned node (and its edge) can be removed.
+   */
+  'advanced-canvas:dialogue-node-spawned': (canvas: Canvas, nodeId: string, edgeId: string) => void
+  /**
    * LLM agent change: Fired after a node is spawned by dragging an edge onto empty canvas space.
    * The choice-route extension listens for it and, if the source node is a frame with choices,
    * opens the choice-binding modal for the new edge. Args: the edge that was just wired to the
