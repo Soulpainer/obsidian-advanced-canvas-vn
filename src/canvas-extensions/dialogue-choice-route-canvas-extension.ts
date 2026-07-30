@@ -772,13 +772,20 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
       return
     }
 
-    // LLM agent change: do NOT consume pendingChoiceRoute here. This native dragged edge is the
-    // first edge created by the drag. If the drop lands on a node, onEdgeCreatedFromChoicePort will
-    // bind it (handled by the route already set in the data). If the drop lands on empty space,
-    // spawnNodeAtDrop creates a NEW edge, and onEdgeNeedsRoute will consume the pending choice for
-    // that edge (and this native edge should be removed). We keep pending alive so both paths work.
-    // Remember this edge so it can be removed if a spawn replaces it.
+    // LLM agent change: bind the route to this native dragged edge (drop on target case). Do NOT
+    // consume pendingChoiceRoute — keep it alive so the spawn flow (drop on empty) can also use it.
+    // If a spawn happens, onEdgeNeedsRoute will remove this native edge and bind the spawn edge.
     this.choiceDragNativeEdge = edge
+
+    const sourceNode = canvas.nodes.get(pending.sourceNodeId)
+    if (sourceNode) {
+      const route: DialogueChoiceRouteData = {
+        type: "choice",
+        choiceId: pending.choiceId,
+        outcome: pending.outcome,
+      }
+      this.saveRoute(canvas, edge, sourceNode, route)
+    }
   }
 
   private renderNodeRoutes(canvas: Canvas, node: CanvasNode) {
