@@ -878,13 +878,18 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
       },
     }
 
-    // Create edge-2: router → target (plain connection).
+    // Create edge-2: router → target, carrying the same route binding so it's colored and
+    // can be split again (double-click). Both halves of the route look identical.
     const edge2Data = {
       id: `split-${Date.now()}-2`,
       fromNode: routerId,
       fromSide: "right" as Side,
       toNode: targetNodeId,
       toSide: "left" as Side,
+      color: this.getRouteCanvasColorId(Math.max(choiceIndex, 0)),
+      ["x-dialogue"]: {
+        route: { type: "choice", choiceId: route.choiceId, outcome: route.outcome },
+      },
     }
 
     canvas.importData({ nodes: [], edges: [edge1Data, edge2Data] }, false, false)
