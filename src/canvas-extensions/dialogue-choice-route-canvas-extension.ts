@@ -736,14 +736,12 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
     }
 
     const reset = () => {
-      // LLM agent change: clear the choice-drag state after a short delay. The native
-      // connection-drop menu (and thus spawnNodeAtDrop → onEdgeNeedsRoute) fires AFTER pointerup,
-      // and consumes pendingChoiceRoute + clears choiceDragInProgress. If the user just cancelled
-      // (released on empty space without picking a spawn item), no one else clears the flag, and
-      // the next port drag would be blocked by the `if (choiceDragInProgress) return` guard. A
-      // 200ms timeout gives the spawn flow time to run; if it doesn't, we clean up here.
+      // LLM agent change: clear choiceDragInProgress so the next port drag isn't blocked, but do
+      // NOT clear pendingChoiceRoute — the user may still click a spawn-menu item (which fires
+      // well after pointerup), and onEdgeNeedsRoute needs the pending choice to bind without a
+      // modal. pendingChoiceRoute is cleared by onEdgeNeedsRoute (spawn) or onEdgeCreatedFromChoicePort
+      // (drop on target); if neither runs, it's harmless until overwritten by the next drag.
       window.setTimeout(() => {
-        this.pendingChoiceRoute = null
         this.choiceDragInProgress = false
       }, 200)
       activeDocument.removeEventListener("pointerup", reset)
