@@ -165,9 +165,6 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
     choiceId: string
     outcome: DialogueChoiceRouteOutcome
   } | null = null
-  // LLM agent change: prevents multiple concurrent choice-port drags from spawning multiple drop
-  // menus. Set on pointerdown, cleared on pointerup.
-  private choiceDragInProgress = false
   // LLM agent change: the native edge created by a choice-port drag (before the user drops). If
   // the drop lands on empty space and a spawn replaces it, this edge is removed.
   private choiceDragNativeEdge: CanvasEdge | null = null
@@ -275,7 +272,6 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
     if (this.pendingChoiceRoute && this.pendingChoiceRoute.sourceNodeId === sourceNodeId) {
       const pending = this.pendingChoiceRoute
       this.pendingChoiceRoute = null
-      this.choiceDragInProgress = false
 
       // Remove the native dragged edge (it pointed nowhere useful — the spawn created a new edge).
       if (this.choiceDragNativeEdge && this.choiceDragNativeEdge !== edge) {
@@ -719,13 +715,6 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
     outcome: DialogueChoiceRouteOutcome,
     startEvent: PointerEvent
   ) {
-    // LLM agent change: block concurrent choice-port drags — otherwise each port click stacked
-    // another native drag + drop menu.
-    if (this.choiceDragInProgress) {
-      return
-    }
-    this.choiceDragInProgress = true
-
     // LLM agent change: mark the canvas wrapper so the router extension can skip its spawn-menu
     // items (drop-to-empty isn't supported for choice drags). Set directly here — earlier this
     // was done in the edge-connection-dragging:before handler, but that fires too late relative
@@ -734,19 +723,6 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
     if (wrapperEl) {
       wrapperEl.dataset.dialogueChoiceDrag = "true"
     }
-
-    const reset = () => {
-      // LLM agent change: clear choiceDragInProgress so the next port drag isn't blocked, but do
-      // NOT clear pendingChoiceRoute — the user may still click a spawn-menu item (which fires
-      // well after pointerup), and onEdgeNeedsRoute needs the pending choice to bind without a
-      // modal. pendingChoiceRoute is cleared by onEdgeNeedsRoute (spawn) or onEdgeCreatedFromChoicePort
-      // (drop on target); if neither runs, it's harmless until overwritten by the next drag.
-      window.setTimeout(() => {
-        this.choiceDragInProgress = false
-      }, 200)
-      activeDocument.removeEventListener("pointerup", reset)
-    }
-    activeDocument.addEventListener("pointerup", reset)
 
     this.pendingChoiceRoute = {
       sourceNodeId: sourceNode.getData().id,
@@ -779,11 +755,6 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
     // consume pendingChoiceRoute — keep it alive so the spawn flow (drop on empty) can also use it.
     // If a spawn happens, onEdgeNeedsRoute will remove this native edge and bind the spawn edge.
     this.choiceDragNativeEdge = edge
-
-    // LLM agent change: drop on target completed — clear the drag-in-progress flag so the next
-    // port drag isn't blocked by the guard in startChoiceDrag. pendingChoiceRoute is left for
-    // the delayed reset (harmless if spawn never fires).
-    this.choiceDragInProgress = false
 
     const sourceNode = canvas.nodes.get(pending.sourceNodeId)
     if (sourceNode) {
