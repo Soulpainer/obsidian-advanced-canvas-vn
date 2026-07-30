@@ -680,7 +680,9 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
         return
       }
 
-      event.preventDefault()
+      // LLM agent change: stop the event from reaching Obsidian's own handlers (node drag, inline
+      // edit), but do NOT preventDefault — we pass this same event to onConnectionPointerdown, and
+      // Obsidian may bail if defaultPrevented is true (drag never starts for empty ports).
       event.stopPropagation()
 
       this.startChoiceDrag(canvas, sourceNode, choiceId, outcome, event)
