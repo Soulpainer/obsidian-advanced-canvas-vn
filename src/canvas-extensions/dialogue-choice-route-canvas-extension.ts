@@ -47,6 +47,9 @@ type DialogueChoiceRouteData = DialogueFailureRouteData & {
 class EditDialogueChoiceRouteModal extends Modal {
   private choiceId: string
   private outcome: DialogueChoiceRouteOutcome
+  // LLM agent change: set to true on Save so onClose can tell a cancel from a submit (used to
+  // clean up freshly-spawned nodes on cancel).
+  private wasSubmitted = false
 
   constructor(
     app: any,
@@ -54,6 +57,7 @@ class EditDialogueChoiceRouteModal extends Modal {
       choices: DialogueChoiceData[]
       initialValue?: DialogueChoiceRouteData
       onSubmit: (value: DialogueChoiceRouteData) => void
+      onClose?: (wasSubmitted: boolean) => void
     }
   ) {
     super(app)
@@ -118,6 +122,7 @@ class EditDialogueChoiceRouteModal extends Modal {
               choiceId: this.choiceId,
               outcome: this.outcome,
             })
+            this.wasSubmitted = true
             this.close()
           })
       })
@@ -125,6 +130,7 @@ class EditDialogueChoiceRouteModal extends Modal {
 
   onClose() {
     this.contentEl.empty()
+    this.options.onClose?.(this.wasSubmitted)
   }
 }
 
@@ -313,6 +319,17 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
       choices,
       initialValue: this.getChoiceRoute(edgeData["x-dialogue"]?.route),
       onSubmit: route => this.saveRoute(canvas, edge, sourceNode, route),
+      // LLM agent change: if the user cancels binding a route to a freshly-spawned node, tell the
+      // frame extension to remove the node + edge.
+      onClose: wasSubmitted => {
+        if (!wasSubmitted) {
+          this.plugin.app.workspace.trigger(
+            "advanced-canvas:dialogue-spawn-cancel",
+            canvas,
+            edge.getData().id
+          )
+        }
+      },
     }).open()
   }
 

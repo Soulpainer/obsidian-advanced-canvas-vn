@@ -63,6 +63,11 @@ export interface CustomWorkspaceEvents {
    */
   'advanced-canvas:dialogue-node-spawned': (canvas: Canvas, nodeId: string, edgeId: string) => void
   /**
+   * LLM agent change: Fired when the user cancels an editor for a freshly-spawned node (choice
+   * route modal or frame modal). The frame extension removes the node + its edge in response.
+   */
+  'advanced-canvas:dialogue-spawn-cancel': (canvas: Canvas, edgeId: string) => void
+  /**
    * LLM agent change: Fired after a node is spawned by dragging an edge onto empty canvas space.
    * The choice-route extension listens for it and, if the source node is a frame with choices,
    * opens the choice-binding modal for the new edge. Args: the edge that was just wired to the

@@ -133,6 +133,13 @@ export default class DialogueFrameCanvasExtension extends CanvasExtension {
         }
       }
     ))
+    // LLM agent change: when a spawn is cancelled from the choice-route modal, remove the node + edge.
+    this.plugin.registerEvent(this.plugin.app.workspace.on(
+      "advanced-canvas:dialogue-spawn-cancel",
+      (_canvas: Canvas, edgeId: string) => {
+        this.removeSpawnedNode(edgeId)
+      }
+    ))
 
     this.scheduleRenderAllCanvases()
   }
@@ -241,17 +248,37 @@ export default class DialogueFrameCanvasExtension extends CanvasExtension {
         // state. Only act for nodes we tracked as spawned — existing nodes are left alone.
         const spawnedEdgeId = this.spawnedFrameNodes.get(node)
         if (spawnedEdgeId !== undefined && !wasSubmitted) {
-          const liveCanvas = this.plugin.getCurrentCanvas()
-          const edge = liveCanvas?.edges.get(spawnedEdgeId)
-          if (edge) {
-            liveCanvas?.removeEdge(edge)
-          }
-          liveCanvas?.removeNode(node)
-          liveCanvas?.pushHistory(liveCanvas.getData())
+          this.removeSpawnedNode(spawnedEdgeId)
         }
         this.spawnedFrameNodes.delete(node)
       },
     }).open()
+  }
+
+  // LLM agent change: remove a freshly-spawned node and its connecting edge (clean up after a
+  // cancelled spawn). Called from the frame editor onClose and from the dialogue-spawn-cancel
+  // event (choice-route modal cancel). Safe to call once — removes the edge, then the node it
+  // points at.
+  private removeSpawnedNode(edgeId: string) {
+    const canvas = this.plugin.getCurrentCanvas()
+    if (!canvas) {
+      return
+    }
+    const edge = canvas.edges.get(edgeId)
+    if (edge) {
+      // Find the spawned node (the edge's target) before removing the edge.
+      const edgeData = edge.getData()
+      const targetId = (edgeData as { toNode?: string }).toNode
+      const targetNode = targetId ? canvas.nodes.get(targetId) : undefined
+
+      canvas.removeEdge(edge)
+      // Only remove the node if we're tracking it as spawned (defensive — never touch unrelated nodes).
+      if (targetNode && this.spawnedFrameNodes.has(targetNode)) {
+        canvas.removeNode(targetNode)
+        this.spawnedFrameNodes.delete(targetNode)
+      }
+      canvas.pushHistory(canvas.getData())
+    }
   }
 
   private openDialogueFrameFromNativeEditRequest(canvas: Canvas, node: CanvasNode) {
