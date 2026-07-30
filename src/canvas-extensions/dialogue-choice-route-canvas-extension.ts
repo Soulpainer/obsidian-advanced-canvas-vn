@@ -233,7 +233,8 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
     // bind the new edge to a choice if the source frame has any.
     this.plugin.registerEvent(this.plugin.app.workspace.on(
       "advanced-canvas:dialogue-edge-needs-route",
-      (canvas: Canvas, edge: CanvasEdge, sourceNode: CanvasNode) => this.onEdgeNeedsRoute(canvas, edge, sourceNode)
+      (canvas: Canvas, edge: CanvasEdge, sourceNode: CanvasNode, openFrameEditorAfter?: boolean) =>
+        this.onEdgeNeedsRoute(canvas, edge, sourceNode, openFrameEditorAfter)
     ))
     this.plugin.registerEvent(this.plugin.app.workspace.on("layout-change", () => this.scheduleRenderAllCanvases()))
     this.plugin.registerEvent(this.plugin.app.workspace.on("active-leaf-change", () => this.scheduleRenderAllCanvases()))
