@@ -336,11 +336,15 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
         this.saveRoute(canvas, edge, sourceNode, route)
         // LLM agent change: in the spawn flow, open the frame editor for the target node AFTER the
         // route is bound (not before, which left an editor open even if the user cancelled binding).
+        // Re-read the live edge data (saveRoute may have changed it) and use the fresh canvas — the
+        // one captured when the modal opened can be stale by the time the user submits.
         if (openFrameEditorAfter) {
-          const targetId = edgeData.toNode
-          const targetNode = targetId ? canvas.nodes.get(targetId) : undefined
-          if (targetNode) {
-            this.plugin.app.workspace.trigger("advanced-canvas:dialogue-frame-edit-requested", canvas, targetNode)
+          const liveCanvas = this.plugin.getCurrentCanvas()
+          const liveEdgeData = edge.getData() as CanvasEdgeDataWithDialogue
+          const targetId = liveEdgeData.toNode
+          const targetNode = targetId && liveCanvas ? liveCanvas.nodes.get(targetId) : undefined
+          if (targetNode && liveCanvas) {
+            this.plugin.app.workspace.trigger("advanced-canvas:dialogue-frame-edit-requested", liveCanvas, targetNode)
           }
         }
       },
