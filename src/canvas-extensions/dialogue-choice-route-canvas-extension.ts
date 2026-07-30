@@ -676,6 +676,13 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
         return
       }
 
+      // LLM agent change: don't start a drag from an already-bound port (one that already has a
+      // route edge). The route-port CSS class is added during render when linkedRoutes has it.
+      if (portEl.classList.contains("dialogue-canvas-choice-route-port")) {
+        event.stopPropagation()
+        return
+      }
+
       // LLM agent change: stop the event from reaching Obsidian's own handlers (node drag, inline
       // edit), but do NOT preventDefault — we pass this same event to onConnectionPointerdown, and
       // Obsidian may bail if defaultPrevented is true (drag never starts for empty ports).
