@@ -73,7 +73,7 @@ export interface CustomWorkspaceEvents {
    * opens the choice-binding modal for the new edge. Args: the edge that was just wired to the
    * spawned node, and the source node the drag started from.
    */
-  'advanced-canvas:dialogue-edge-needs-route': (canvas: Canvas, edge: CanvasEdge, sourceNode: CanvasNode) => void
+  'advanced-canvas:dialogue-edge-needs-route': (canvas: Canvas, edge: CanvasEdge, sourceNode: CanvasNode, openFrameEditorAfter?: boolean) => void
   /** Fired when the text content of a node gets changed (While typing) */
   'advanced-canvas:node-text-content-changed': (canvas: Canvas, node: CanvasNode, viewUpdate: any) => void
   /** Fired before an existing edge tries to get dragged */

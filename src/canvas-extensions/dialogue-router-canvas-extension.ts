@@ -450,7 +450,12 @@ export default class DialogueRouterCanvasExtension extends CanvasExtension {
         "advanced-canvas:dialogue-edge-needs-route",
         canvas,
         createdEdge,
-        sourceNode
+        sourceNode,
+        // LLM agent change: for frame spawns, let the frame editor open only AFTER route binding
+        // succeeds (handled inside onEdgeNeedsRoute/openBindRouteModal). Emitting frame-edit-
+        // requested here synchronously would open the editor immediately, leaving it open even if
+        // the user cancels the route-binding modal.
+        kind === "frame"
       )
     }
 
@@ -467,11 +472,10 @@ export default class DialogueRouterCanvasExtension extends CanvasExtension {
       )
     }
 
-    // For frames, open the editor (mirrors createDialogueFrameNode). Routers render via the
-    // node-added/node-changed listeners.
-    if (kind === "frame") {
-      this.plugin.app.workspace.trigger("advanced-canvas:dialogue-frame-edit-requested", canvas, node)
-    } else {
+    // LLM agent change: the frame editor is now opened from inside onEdgeNeedsRoute
+    // (choice-route extension) once route binding succeeds — see openFrameEditorAfter above.
+    // For router spawns, just render the node.
+    if (kind !== "frame") {
       this.renderRouterNode(canvas, node)
     }
   }

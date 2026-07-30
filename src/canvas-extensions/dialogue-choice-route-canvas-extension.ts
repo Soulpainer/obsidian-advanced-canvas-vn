@@ -245,14 +245,21 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
   // dialogue frame that has choices, open the choice-binding modal so the freshly created edge
   // becomes a proper route immediately. Edges from non-frame sources or frames without choices
   // are left as plain connections.
-  private onEdgeNeedsRoute(canvas: Canvas, edge: CanvasEdge, sourceNode: CanvasNode) {
+  private onEdgeNeedsRoute(canvas: Canvas, edge: CanvasEdge, sourceNode: CanvasNode, openFrameEditorAfter = false) {
     const edgeData = edge.getData() as CanvasEdgeDataWithDialogue
     const existingRoute = this.getChoiceRoute(edgeData["x-dialogue"]?.route)
 
     // LLM agent change: if the edge already has a route (e.g. it was dragged from a choice port),
-    // there is nothing to prompt for — just keep the binding and re-render.
+    // there is nothing to prompt for — just keep the binding and re-render. If asked to open the
+    // frame editor afterwards (spawn flow), do that now since there's no modal to wait on.
     if (existingRoute) {
       this.scheduleRenderCanvas(canvas)
+      if (openFrameEditorAfter) {
+        const targetNode = edgeData.toNode ? canvas.nodes.get(edgeData.toNode) : undefined
+        if (targetNode) {
+          this.plugin.app.workspace.trigger("advanced-canvas:dialogue-frame-edit-requested", canvas, targetNode)
+        }
+      }
       return
     }
 
@@ -260,10 +267,17 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
     const choices = sourceNodeData["x-dialogue"]?.frame?.choices ?? []
 
     if (choices.length === 0) {
+      // No choices to bind — if the caller wanted the frame editor opened, open it now.
+      if (openFrameEditorAfter) {
+        const targetNode = edgeData.toNode ? canvas.nodes.get(edgeData.toNode) : undefined
+        if (targetNode) {
+          this.plugin.app.workspace.trigger("advanced-canvas:dialogue-frame-edit-requested", canvas, targetNode)
+        }
+      }
       return
     }
 
-    this.openBindRouteModal(canvas, edge)
+    this.openBindRouteModal(canvas, edge, openFrameEditorAfter)
   }
 
   private onPopupMenuCreated(canvas: Canvas) {
@@ -304,7 +318,7 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
     }
   }
 
-  private openBindRouteModal(canvas: Canvas, edge: CanvasEdge) {
+  private openBindRouteModal(canvas: Canvas, edge: CanvasEdge, openFrameEditorAfter = false) {
     const edgeData = edge.getData() as CanvasEdgeDataWithDialogue
     const sourceNode = edgeData.fromNode ? canvas.nodes.get(edgeData.fromNode) : undefined
     const sourceNodeData = sourceNode?.getData() as CanvasNodeDataWithDialogue | undefined
@@ -318,7 +332,18 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
     new EditDialogueChoiceRouteModal(this.plugin.app as any, {
       choices,
       initialValue: this.getChoiceRoute(edgeData["x-dialogue"]?.route),
-      onSubmit: route => this.saveRoute(canvas, edge, sourceNode, route),
+      onSubmit: route => {
+        this.saveRoute(canvas, edge, sourceNode, route)
+        // LLM agent change: in the spawn flow, open the frame editor for the target node AFTER the
+        // route is bound (not before, which left an editor open even if the user cancelled binding).
+        if (openFrameEditorAfter) {
+          const targetId = edgeData.toNode
+          const targetNode = targetId ? canvas.nodes.get(targetId) : undefined
+          if (targetNode) {
+            this.plugin.app.workspace.trigger("advanced-canvas:dialogue-frame-edit-requested", canvas, targetNode)
+          }
+        }
+      },
       // LLM agent change: if the user cancels binding a route to a freshly-spawned node, tell the
       // frame extension to remove the node + edge.
       onClose: wasSubmitted => {
