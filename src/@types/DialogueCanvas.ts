@@ -192,6 +192,10 @@ export interface DialogueFailureRouteData {
   choiceId?: string
   outcome?: DialogueChoiceRouteOutcome
   statId?: string
+  // LLM agent change: cached choice index for color/styling, set when the route is bound. Used
+  // when the edge's fromNode is a router (no choices) so renderRouteEdge can still apply the
+  // correct color without walking back to the source frame.
+  choiceIndex?: number
 }
 
 export interface DialogueRouteData {

@@ -413,9 +413,12 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
     const sourceNodeData = sourceNode.getData() as CanvasNodeDataWithDialogue
     const choices = sourceNodeData["x-dialogue"]?.frame?.choices ?? []
     const choiceIndex = choices.findIndex(choice => choice.choiceId === route.choiceId)
+    // LLM agent change: cache the choice index in the route data so renderRouteEdge can apply the
+    // correct color even when the edge's fromNode is a router (which has no choices).
+    const routeWithIndex = { ...route, choiceIndex: Math.max(choiceIndex, 0) }
     const nextXDialogue: DialogueEdgeData = {
       ...edgeData["x-dialogue"],
-      route,
+      route: routeWithIndex,
     }
 
     delete nextXDialogue.answer
@@ -874,7 +877,7 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
       toSide: "left" as Side,
       color: this.getRouteCanvasColorId(Math.max(choiceIndex, 0)),
       ["x-dialogue"]: {
-        route: { type: "choice", choiceId: route.choiceId, outcome: route.outcome },
+        route: { type: "choice", choiceId: route.choiceId, outcome: route.outcome, choiceIndex: Math.max(choiceIndex, 0) },
       },
     }
 
@@ -888,7 +891,7 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
       toSide: "left" as Side,
       color: this.getRouteCanvasColorId(Math.max(choiceIndex, 0)),
       ["x-dialogue"]: {
-        route: { type: "choice", choiceId: route.choiceId, outcome: route.outcome },
+        route: { type: "choice", choiceId: route.choiceId, outcome: route.outcome, choiceIndex: Math.max(choiceIndex, 0) },
       },
     }
 
@@ -922,13 +925,26 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
     const sourceNode = canvas.nodes.get(edgeData.fromNode)
     const sourceNodeData = sourceNode?.getData() as CanvasNodeDataWithDialogue | undefined
     const choices = sourceNodeData?.["x-dialogue"]?.frame?.choices ?? []
-    const choiceIndex = choices.findIndex(choice => choice.choiceId === route.choiceId)
+    let choiceIndex = choices.findIndex(choice => choice.choiceId === route.choiceId)
+
+    // LLM agent change: if fromNode is a router (no choices), fall back to the cached choiceIndex
+    // stored in the route data by saveRoute. This keeps the color correct for split edges.
+    if (choiceIndex < 0 && route.choiceIndex !== undefined) {
+      choiceIndex = route.choiceIndex
+    }
+
+    // For router-source nodes, use the bbox center as anchor (no choice port to anchor to).
+    const isRouterSource = choices.length === 0
 
     if (!sourceNode || choiceIndex < 0) {
       return
     }
 
-    const anchor = this.getChoiceAnchor(canvas, sourceNode, route.choiceId, route.outcome)
+    // LLM agent change: anchor choice — frame source anchors to the choice port, router source
+    // anchors to its bbox edge center (routers have no choice ports).
+    const anchor = isRouterSource
+      ? this.getRouterAnchor(sourceNode, edge.from.side)
+      : this.getChoiceAnchor(canvas, sourceNode, route.choiceId!, route.outcome!)
     const target = this.getEdgeTargetAnchor(canvas, edge, edgeData)
     const path = this.buildBezierPath(anchor, target, edge.from.side, edge.to.side)
 
@@ -950,6 +966,16 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
     this.applyEdgeColor(edge, this.getRouteColorCss(choiceIndex, route.outcome))
     // LLM agent change: do not re-render the native label from our route renderer; it can recursively trigger edge renders.
     this.setEdgeLabelVisible(edge, false)
+  }
+
+  // LLM agent change: anchor for a router node — center of the given side of its bbox.
+  private getRouterAnchor(routerNode: CanvasNode, side: string): Position {
+    const bbox = routerNode.getBBox()
+    if (side === "left") return { x: bbox.minX, y: (bbox.minY + bbox.maxY) / 2 }
+    if (side === "right") return { x: bbox.maxX, y: (bbox.minY + bbox.maxY) / 2 }
+    if (side === "top") return { x: (bbox.minX + bbox.maxX) / 2, y: bbox.minY }
+    if (side === "bottom") return { x: (bbox.minX + bbox.maxX) / 2, y: bbox.maxY }
+    return { x: bbox.maxX, y: (bbox.minY + bbox.maxY) / 2 }
   }
 
   private getChoiceAnchor(
