@@ -129,6 +129,9 @@ export default class DialogueRouterCanvasExtension extends CanvasExtension {
         // will be empty and won't show.
         if (canvas.wrapperEl?.dataset.dialogueChoiceDrag === "true") {
           this.lastDragSourceNode = null
+          // LLM agent change: clear the marker now that the drop-menu has run, so a subsequent
+          // normal drag isn't wrongly suppressed.
+          delete canvas.wrapperEl.dataset.dialogueChoiceDrag
           return
         }
 
@@ -365,11 +368,17 @@ export default class DialogueRouterCanvasExtension extends CanvasExtension {
   // choice-route extension can prompt for a choice binding (frame source with choices) and open
   // the frame editor for frames.
   private spawnNodeAtDrop(
-    canvas: Canvas,
+    canvas: Canvas | undefined,
     sourceNodeId: string,
     dropPosition: Position,
     kind: "frame" | "router"
   ) {
+    // LLM agent change: guard — the canvas object captured at menu-show time can become stale by
+    // the time the user clicks a menu item (Obsidian may have rebuilt it). Bail safely instead of
+    // throwing 'Cannot read properties of undefined (reading get)'.
+    if (!canvas?.nodes) {
+      return
+    }
     const sourceNode = canvas.nodes.get(sourceNodeId)
     if (!sourceNode) {
       return

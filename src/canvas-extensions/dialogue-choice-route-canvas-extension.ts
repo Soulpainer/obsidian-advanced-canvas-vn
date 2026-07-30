@@ -221,16 +221,7 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
     ))
     this.plugin.registerEvent(this.plugin.app.workspace.on(
       "advanced-canvas:edge-connection-dragging:before",
-      (canvas: Canvas) => {
-        this.renderWhilePointerMoves(canvas)
-        // LLM agent change: mark the canvas while a choice-port drag is in progress, so the router
-        // extension can skip adding its spawn-menu items (drop-to-empty isn't supported for choice
-        // drags — it conflicts with the native dragged edge). Router reads this dataset in its
-        // connection-drop-menu handler.
-        if (this.choiceDragInProgress && canvas.wrapperEl) {
-          canvas.wrapperEl.dataset.dialogueChoiceDrag = "true"
-        }
-      }
+      (canvas: Canvas) => this.renderWhilePointerMoves(canvas)
     ))
     // LLM agent change: when a node is spawned by dragging an edge onto empty space, prompt to
     // bind the new edge to a choice if the source frame has any.
@@ -648,6 +639,15 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
       return
     }
     this.choiceDragInProgress = true
+
+    // LLM agent change: mark the canvas wrapper so the router extension can skip its spawn-menu
+    // items (drop-to-empty isn't supported for choice drags). Set directly here — earlier this
+    // was done in the edge-connection-dragging:before handler, but that fires too late relative
+    // to the connection-drop-menu, so the flag was missing.
+    const wrapperEl = sourceNode.canvas?.wrapperEl
+    if (wrapperEl) {
+      wrapperEl.dataset.dialogueChoiceDrag = "true"
+    }
 
     const reset = () => {
       // LLM agent change: do NOT clear choiceDragInProgress here. The native connection-drop
