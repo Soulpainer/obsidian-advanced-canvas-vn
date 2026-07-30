@@ -867,10 +867,8 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
     // Remove the old edge.
     canvas.removeEdge(clickedEdge)
 
-    // LLM agent change: use the cached choiceIndex from the route data if present (set by
-    // saveRoute). This avoids re-looking-up the choice on the source node, which fails when the
-    // source is a router (no choices) after a chain of splits.
-    const choiceIndex = route.choiceIndex ?? Math.max(this.getChoiceIndex(canvas, sourceNodeId, route.choiceId!), 0)
+    // Create edge-1: source → router, carrying the route binding.
+    const choiceIndex = this.getChoiceIndex(canvas, sourceNodeId, route.choiceId)
     const edge1Data = {
       id: `split-${Date.now()}-1`,
       fromNode: sourceNodeId,
@@ -898,16 +896,7 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
     }
 
     canvas.importData({ nodes: [], edges: [edge1Data, edge2Data] }, false, false)
-
-    // LLM agent change: re-fetch the router node from canvas after importData (it may have been
-    // rebuilt), then select it through updateSelection so Delete works properly.
-    const liveRouter = canvas.nodes.get(routerId)
-    if (liveRouter) {
-      canvas.updateSelection(() => {
-        canvas.deselectAll()
-        canvas.selection.add(liveRouter)
-      })
-    }
+    canvas.selectOnly(routerNode)
     canvas.pushHistory(canvas.getData())
     this.scheduleRenderCanvas(canvas)
   }
