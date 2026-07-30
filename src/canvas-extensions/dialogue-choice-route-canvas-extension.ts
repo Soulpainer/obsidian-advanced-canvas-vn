@@ -264,31 +264,6 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
       return
     }
 
-    const sourceNodeId = sourceNode.getData().id
-
-    // LLM agent change: if this edge came from a choice-port drag (we have a pending choice route
-    // for this source), bind it directly without showing the choice-binding modal — the choice
-    // was already picked by dragging from that port.
-    if (this.pendingChoiceRoute && this.pendingChoiceRoute.sourceNodeId === sourceNodeId) {
-      const pending = this.pendingChoiceRoute
-      this.pendingChoiceRoute = null
-      const route: DialogueChoiceRouteData = {
-        type: "choice",
-        choiceId: pending.choiceId,
-        outcome: pending.outcome,
-      }
-      this.saveRoute(canvas, edge, sourceNode, route)
-      if (openFrameEditorAfter) {
-        const liveCanvas = this.plugin.getCurrentCanvas() ?? canvas
-        const liveEdgeData = edge.getData() as CanvasEdgeDataWithDialogue
-        const targetNode = liveEdgeData.toNode ? liveCanvas.nodes.get(liveEdgeData.toNode) : undefined
-        if (targetNode) {
-          this.plugin.app.workspace.trigger("advanced-canvas:dialogue-frame-edit-requested", liveCanvas, targetNode)
-        }
-      }
-      return
-    }
-
     const sourceNodeData = sourceNode.getData() as CanvasNodeDataWithDialogue
     const choices = sourceNodeData["x-dialogue"]?.frame?.choices ?? []
 
@@ -712,11 +687,23 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
     }
     this.choiceDragInProgress = true
 
+    // LLM agent change: mark the canvas wrapper so the router extension can skip its spawn-menu
+    // items (drop-to-empty isn't supported for choice drags). Set directly here — earlier this
+    // was done in the edge-connection-dragging:before handler, but that fires too late relative
+    // to the connection-drop-menu, so the flag was missing.
+    const wrapperEl = sourceNode.canvas?.wrapperEl
+    if (wrapperEl) {
+      wrapperEl.dataset.dialogueChoiceDrag = "true"
+    }
+
     const reset = () => {
-      // LLM agent change: do NOT clear pendingChoiceRoute here. For drop-on-empty (spawn flow),
-      // the connection-drop-menu fires AFTER pointerup, and spawnNodeAtDrop emits
-      // dialogue-edge-needs-route which consumes the pending route in onEdgeNeedsRoute. Clearing
-      // here would lose it before the spawn runs.
+      // LLM agent change: do NOT clear choiceDragInProgress here. The native connection-drop
+      // menu fires AFTER pointerup, and the router reads canvas.wrapperEl.dataset.dialogueChoiceDrag
+      // to skip its spawn items. We clear the flag (and the dataset) in onEdgeCreatedFromChoicePort
+      // (drop on target) — but for a drop on empty space the flag stays set until the next
+      // interaction; that's fine because the router has already decided not to add items by then.
+      // We only clear pendingChoiceRoute here so it can't leak if the drag produced no edge.
+      this.pendingChoiceRoute = null
       activeDocument.removeEventListener("pointerup", reset)
     }
     activeDocument.addEventListener("pointerup", reset)

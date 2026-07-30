@@ -123,6 +123,18 @@ export default class DialogueRouterCanvasExtension extends CanvasExtension {
           return
         }
 
+        // LLM agent change: a drag started from a choice port marks the canvas wrapper
+        // (data-dialogue-choice-drag). Drop-to-empty isn't supported for choice drags (it
+        // conflicts with the native dragged edge), so don't add the spawn items — the menu
+        // will be empty and won't show.
+        if (canvas.wrapperEl?.dataset.dialogueChoiceDrag === "true") {
+          this.lastDragSourceNode = null
+          // LLM agent change: clear the marker now that the drop-menu has run, so a subsequent
+          // normal drag isn't wrongly suppressed.
+          delete canvas.wrapperEl.dataset.dialogueChoiceDrag
+          return
+        }
+
         const dropPosition = this.lastDropPosition
         if (!dropPosition) {
           return
