@@ -736,13 +736,16 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
     }
 
     const reset = () => {
-      // LLM agent change: do NOT clear choiceDragInProgress here. The native connection-drop
-      // menu fires AFTER pointerup, and the router reads canvas.wrapperEl.dataset.dialogueChoiceDrag
-      // to skip its spawn items. We clear the flag (and the dataset) in onEdgeCreatedFromChoicePort
-      // LLM agent change: do NOT clear pendingChoiceRoute or choiceDragInProgress here.
-      // The connection-drop-menu fires AFTER pointerup, and the spawn flow (spawnNodeAtDrop →
-      // dialogue-edge-needs-route → onEdgeNeedsRoute) consumes pendingChoiceRoute there.
-      // If we cleared here, the spawn flow would lose the choice binding.
+      // LLM agent change: clear the choice-drag state after a short delay. The native
+      // connection-drop menu (and thus spawnNodeAtDrop → onEdgeNeedsRoute) fires AFTER pointerup,
+      // and consumes pendingChoiceRoute + clears choiceDragInProgress. If the user just cancelled
+      // (released on empty space without picking a spawn item), no one else clears the flag, and
+      // the next port drag would be blocked by the `if (choiceDragInProgress) return` guard. A
+      // 200ms timeout gives the spawn flow time to run; if it doesn't, we clean up here.
+      window.setTimeout(() => {
+        this.pendingChoiceRoute = null
+        this.choiceDragInProgress = false
+      }, 200)
       activeDocument.removeEventListener("pointerup", reset)
     }
     activeDocument.addEventListener("pointerup", reset)
@@ -778,6 +781,11 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
     // consume pendingChoiceRoute — keep it alive so the spawn flow (drop on empty) can also use it.
     // If a spawn happens, onEdgeNeedsRoute will remove this native edge and bind the spawn edge.
     this.choiceDragNativeEdge = edge
+
+    // LLM agent change: drop on target completed — clear the drag-in-progress flag so the next
+    // port drag isn't blocked by the guard in startChoiceDrag. pendingChoiceRoute is left for
+    // the delayed reset (harmless if spawn never fires).
+    this.choiceDragInProgress = false
 
     const sourceNode = canvas.nodes.get(pending.sourceNodeId)
     if (sourceNode) {
