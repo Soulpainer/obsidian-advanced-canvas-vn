@@ -215,6 +215,13 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
       "advanced-canvas:edge-created",
       (canvas: Canvas, edge: CanvasEdge) => this.onEdgeCreatedFromChoicePort(canvas, edge)
     ))
+    // LLM agent change: double-clicking a route edge inserts a route node at the click point,
+    // splitting the edge into two (source→router, router→target) so the route styling is preserved.
+    this.plugin.registerEvent(this.plugin.app.workspace.on(
+      "advanced-canvas:double-click",
+      (canvas: Canvas, event: MouseEvent, preventDefault: { value: boolean }) =>
+        this.onEdgeDoubleClick(canvas, event, preventDefault)
+    ))
     const rerender = (canvas: Canvas) => this.scheduleRenderCanvas(canvas)
     this.plugin.registerEvent(this.plugin.app.workspace.on("advanced-canvas:node-changed", rerender))
     this.plugin.registerEvent(this.plugin.app.workspace.on(
@@ -792,6 +799,109 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
       // LLM agent change: node moves only refresh directly attached dialogue choice routes.
       this.renderRouteEdge(canvas, edge)
     }
+  }
+
+  // LLM agent change: double-clicking a route edge inserts a router node at the click point,
+  // splitting the edge into source→router (keeps route binding) and router→target (plain).
+  private onEdgeDoubleClick(canvas: Canvas, event: MouseEvent, preventDefault: { value: boolean }) {
+    const target = event.target
+    if (!(target instanceof HTMLElement) && !(target instanceof SVGElement)) {
+      return
+    }
+
+    // Find the edge whose path element was double-clicked.
+    let clickedEdge: CanvasEdge | null = null
+    for (const edge of canvas.edges.values()) {
+      const interactionPath = edge.path?.interaction as unknown as Element | null
+      const displayPath = edge.path?.display as unknown as Element | null
+      if (target === interactionPath || target === displayPath || displayPath?.contains(target as Node)) {
+        clickedEdge = edge
+        break
+      }
+    }
+
+    if (!clickedEdge) {
+      return
+    }
+
+    const edgeData = clickedEdge.getData() as CanvasEdgeDataWithDialogue
+    const route = this.getChoiceRoute(edgeData["x-dialogue"]?.route)
+    if (!route || !edgeData.fromNode || !edgeData.toNode) {
+      return
+    }
+
+    // This is a route edge — prevent Obsidian's default double-click (label editing).
+    preventDefault.value = true
+
+    const clickPos = canvas.posFromEvt(event)
+    const routerSize = 28
+
+    // Create the router node at the click point.
+    const routerNode = canvas.createTextNode({
+      pos: {
+        x: clickPos.x - routerSize / 2,
+        y: clickPos.y - routerSize / 2,
+      },
+      size: { width: routerSize, height: routerSize },
+    })
+    const routerNodeData = routerNode.getData() as CanvasNodeDataWithDialogue
+    const routerNextData: CanvasNodeDataWithDialogue = {
+      ...routerNodeData,
+      text: "",
+      width: routerSize,
+      height: routerSize,
+      "x-dialogue": {
+        ...routerNodeData["x-dialogue"],
+        router: { type: "point" },
+      },
+    }
+    routerNode.setData(routerNextData)
+
+    const routerId = routerNode.getData().id
+    const sourceNodeId = edgeData.fromNode!
+    const targetNodeId = edgeData.toNode!
+
+    // Remove the old edge.
+    canvas.removeEdge(clickedEdge)
+
+    // Create edge-1: source → router, carrying the route binding.
+    const choiceIndex = this.getChoiceIndex(canvas, sourceNodeId, route.choiceId)
+    const edge1Data = {
+      id: `split-${Date.now()}-1`,
+      fromNode: sourceNodeId,
+      fromSide: "right" as Side,
+      toNode: routerId,
+      toSide: "left" as Side,
+      color: this.getRouteCanvasColorId(Math.max(choiceIndex, 0)),
+      ["x-dialogue"]: {
+        route: { type: "choice", choiceId: route.choiceId, outcome: route.outcome },
+      },
+    }
+
+    // Create edge-2: router → target (plain connection).
+    const edge2Data = {
+      id: `split-${Date.now()}-2`,
+      fromNode: routerId,
+      fromSide: "right" as Side,
+      toNode: targetNodeId,
+      toSide: "left" as Side,
+    }
+
+    canvas.importData({ nodes: [], edges: [edge1Data, edge2Data] }, false, false)
+    canvas.selectOnly(routerNode)
+    canvas.pushHistory(canvas.getData())
+    this.scheduleRenderCanvas(canvas)
+  }
+
+  // LLM agent change: get the index of a choice by id in the source node's choices.
+  private getChoiceIndex(canvas: Canvas, sourceNodeId: string, choiceId: string): number {
+    const sourceNode = canvas.nodes.get(sourceNodeId)
+    if (!sourceNode) {
+      return 0
+    }
+    const data = sourceNode.getData() as CanvasNodeDataWithDialogue
+    const choices = data["x-dialogue"]?.frame?.choices ?? []
+    return choices.findIndex(choice => choice?.choiceId === choiceId)
   }
 
   private renderRouteEdge(canvas: Canvas, edge: CanvasEdge) {
