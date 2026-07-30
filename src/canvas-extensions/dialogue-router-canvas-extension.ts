@@ -368,14 +368,15 @@ export default class DialogueRouterCanvasExtension extends CanvasExtension {
   // choice-route extension can prompt for a choice binding (frame source with choices) and open
   // the frame editor for frames.
   private spawnNodeAtDrop(
-    canvas: Canvas | undefined,
+    _canvas: Canvas | undefined,
     sourceNodeId: string,
     dropPosition: Position,
     kind: "frame" | "router"
   ) {
-    // LLM agent change: guard — the canvas object captured at menu-show time can become stale by
-    // the time the user clicks a menu item (Obsidian may have rebuilt it). Bail safely instead of
-    // throwing 'Cannot read properties of undefined (reading get)'.
+    // LLM agent change: the canvas captured at menu-show time can be stale by the time the user
+    // clicks a menu item (Obsidian may have rebuilt it). Fetch the fresh, live canvas from the
+    // plugin instead of trusting the captured one.
+    const canvas = this.plugin.getCurrentCanvas()
     if (!canvas?.nodes) {
       return
     }
