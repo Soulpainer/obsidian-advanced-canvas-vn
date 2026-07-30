@@ -658,6 +658,10 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
       }
       const portEl = target.closest(".dialogue-canvas-choice-swatch, .dialogue-canvas-choice-failure-port") as HTMLElement | null
       if (!portEl || !wrapperEl.contains(portEl)) {
+        // LLM agent change: not a choice port — clear any leftover pending route so it doesn't
+        // leak into the next default-point drag (e.g. user clicked a port earlier, then drags
+        // from the node's default connection point).
+        this.pendingChoiceRoute = null
         return
       }
 
