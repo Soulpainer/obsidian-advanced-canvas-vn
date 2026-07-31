@@ -805,7 +805,9 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
   }
 
   // LLM agent change: double-clicking a route edge inserts a router node at the click point,
-  // splitting the edge into source→router (keeps route binding) and router→target (plain).
+  // splitting the edge into source→router and router→target, both carrying the route binding.
+  // All changes (remove old edge + add router node + add two new edges) go through a single
+  // importData call so canvas never sees an intermediate inconsistent state.
   private onEdgeDoubleClick(canvas: Canvas, event: MouseEvent, preventDefault: { value: boolean }) {
     const target = event.target
     if (!(target instanceof HTMLElement) && !(target instanceof SVGElement)) {
@@ -838,34 +840,9 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
 
     const clickPos = canvas.posFromEvt(event)
     const routerSize = 28
-
-    // Create the router node at the click point.
-    const routerNode = canvas.createTextNode({
-      pos: {
-        x: clickPos.x - routerSize / 2,
-        y: clickPos.y - routerSize / 2,
-      },
-      size: { width: routerSize, height: routerSize },
-    })
-    const routerNodeData = routerNode.getData() as CanvasNodeDataWithDialogue
-    const routerNextData: CanvasNodeDataWithDialogue = {
-      ...routerNodeData,
-      text: "",
-      width: routerSize,
-      height: routerSize,
-      "x-dialogue": {
-        ...routerNodeData["x-dialogue"],
-        router: { type: "point" },
-      },
-    }
-    routerNode.setData(routerNextData)
-
-    const routerId = routerNode.getData().id
     const sourceNodeId = edgeData.fromNode!
     const targetNodeId = edgeData.toNode!
-
-    // Remove the old edge.
-    canvas.removeEdge(clickedEdge)
+    const oldEdgeId = clickedEdge.getData().id
 
     // LLM agent change: use the cached choiceIndex from route data if present (set by saveRoute
     // or a prior split). Avoids re-looking-up the choice on the source — fails when source is a
@@ -873,46 +850,69 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
     const choiceIndex = route.choiceIndex !== undefined
       ? route.choiceIndex
       : Math.max(this.getChoiceIndex(canvas, sourceNodeId, route.choiceId!), 0)
-    const edge1Data = {
-      id: `split-${Date.now()}-1`,
-      fromNode: sourceNodeId,
-      fromSide: "right" as Side,
-      toNode: routerId,
-      toSide: "left" as Side,
-      color: this.getRouteCanvasColorId(Math.max(choiceIndex, 0)),
-      ["x-dialogue"]: {
-        route: { type: "choice", choiceId: route.choiceId, outcome: route.outcome, choiceIndex: Math.max(choiceIndex, 0) },
-      },
+    const colorId = this.getRouteCanvasColorId(choiceIndex)
+
+    // Generate a router node id upfront (don't create the node via canvas.createTextNode — we'll
+    // add it through importData together with the edges so there's no intermediate state).
+    const routerId = `split-router-${Date.now()}`
+    const stamp = Date.now()
+
+    // Build the full import payload: router node + two edges.
+    const importPayload = {
+      nodes: [
+        {
+          id: routerId,
+          type: "text" as const,
+          text: "",
+          x: clickPos.x - routerSize / 2,
+          y: clickPos.y - routerSize / 2,
+          width: routerSize,
+          height: routerSize,
+          ["x-dialogue"]: {
+            router: { type: "point" },
+          },
+        },
+      ],
+      edges: [
+        // edge-1: source → router
+        {
+          id: `split-${stamp}-1`,
+          fromNode: sourceNodeId,
+          fromSide: "right" as Side,
+          toNode: routerId,
+          toSide: "left" as Side,
+          color: colorId,
+          ["x-dialogue"]: {
+            route: { type: "choice", choiceId: route.choiceId, outcome: route.outcome, choiceIndex },
+          },
+        },
+        // edge-2: router → target
+        {
+          id: `split-${stamp}-2`,
+          fromNode: routerId,
+          fromSide: "right" as Side,
+          toNode: targetNodeId,
+          toSide: "left" as Side,
+          color: colorId,
+          ["x-dialogue"]: {
+            route: { type: "choice", choiceId: route.choiceId, outcome: route.outcome, choiceIndex },
+          },
+        },
+      ],
     }
 
-    // Create edge-2: router → target, carrying the same route binding so it's colored and
-    // can be split again (double-click). Both halves of the route look identical.
-    const edge2Data = {
-      id: `split-${Date.now()}-2`,
-      fromNode: routerId,
-      fromSide: "right" as Side,
-      toNode: targetNodeId,
-      toSide: "left" as Side,
-      color: this.getRouteCanvasColorId(Math.max(choiceIndex, 0)),
-      ["x-dialogue"]: {
-        route: { type: "choice", choiceId: route.choiceId, outcome: route.outcome, choiceIndex: Math.max(choiceIndex, 0) },
-      },
-    }
-
-    canvas.importData({ nodes: [], edges: [edge1Data, edge2Data] }, false, false)
+    // Remove the old edge first, then import router + two edges in one shot.
+    canvas.removeEdge(clickedEdge)
+    canvas.importData(importPayload, false, false)
     canvas.pushHistory(canvas.getData())
     this.scheduleRenderCanvas(canvas)
 
-    // LLM agent change: select the router node after importData settles. Deferred via setTimeout
-    // because importData can rebuild canvas internals synchronously; selecting immediately left
-    // the node visually highlighted but not properly in canvas.selection (Delete didn't work).
-    window.setTimeout(() => {
-      const liveCanvas = this.plugin.getCurrentCanvas()
-      const liveNode = liveCanvas?.nodes.get(routerId)
-      if (liveCanvas && liveNode) {
-        liveCanvas.selectOnly(liveNode)
-      }
-    }, 0)
+    // LLM agent change: select the router node after importData settles. Re-fetch from canvas
+    // because importData may have rebuilt node objects.
+    const liveRouter = canvas.nodes.get(routerId)
+    if (liveRouter) {
+      canvas.selectOnly(liveRouter)
+    }
   }
 
   // LLM agent change: get the index of a choice by id in the source node's choices.
