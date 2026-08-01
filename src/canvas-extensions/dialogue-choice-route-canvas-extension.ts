@@ -1209,32 +1209,31 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
 
     const result = new Map<string, { fromSide: Side; toSide: Side }>()
 
-    // LLM agent change: special case — exactly 1 incoming + 1 outgoing. To avoid a jagged 90° bend
-    // (e.g. input from top, output to right), route both edges along the SAME axis determined by the
-    // overall source→target flow. If the flow is mostly horizontal, both the input (from source) and
-    // output (to target) attach to the left/right faces; if mostly vertical, both attach to top/bottom.
-    // This makes a 1-in/1-out router look like a smooth pass-through. (When input & output are on the
-    // SAME side of the router — e.g. both neighbors to the right — they share a face, which is the
-    // nearest-point behavior and looks fine too.)
+    // LLM agent change: special case — exactly 1 incoming + 1 outgoing. Each edge attaches to the
+    // face nearest its OWN neighbor (source for the input, target for the output). This gives a
+    // natural straight line when the two neighbors sit on opposite faces of the router, and a smooth
+    // 90° bend when they are perpendicular. The previous attempt forced both edges onto a single
+    // shared axis, but that sent an edge to the WRONG face whenever the two neighbors were on
+    // different axes (e.g. source upper-left, target below) — producing the coils seen on roughly
+    // straight vertical/horizontal layouts.
+    //
+    // The one case "nearest face for each" gets wrong is a U-turn layout, where both neighbors lie
+    // on the SAME face: both edges would pile onto that face and overlap. Resolve that by pushing
+    // the OUTPUT onto the opposite face, so the line makes a clean pass-through (in on the near
+    // face, out on the far face) instead of doubling back over itself.
     if (incoming.length === 1 && outgoing.length === 1) {
       const inc = incoming[0]!
       const out = outgoing[0]!
-      const inSide = inc.otherNode ? this.nearestSide(routerCenter, this.nodeCenter(inc.otherNode)) : "left"
-      const outSide = out.otherNode ? this.nearestSide(routerCenter, this.nodeCenter(out.otherNode)) : "right"
-      const axis: "horizontal" | "vertical" = inSide === "top" || inSide === "bottom" || outSide === "top" || outSide === "bottom"
-        ? "vertical"
-        : "horizontal"
-      if (axis === "vertical") {
-        // Both edges use top/bottom faces. The input side mirrors the source's vertical position;
-        // the output side mirrors the target's. If both neighbors are on the SAME vertical side, they
-        // share that face (nearest-point), which still looks smooth.
-        result.set(inc.edgeId, { fromSide: "top", toSide: inSide === "top" ? "top" : "bottom" })
-        result.set(out.edgeId, { fromSide: outSide === "top" ? "top" : "bottom", toSide: "left" })
-      } else {
-        // horizontal: both use left/right faces.
-        result.set(inc.edgeId, { fromSide: "right", toSide: inSide === "right" ? "right" : "left" })
-        result.set(out.edgeId, { fromSide: outSide === "right" ? "right" : "left", toSide: "left" })
+      const inSide: Side = inc.otherNode ? this.nearestSide(routerCenter, this.nodeCenter(inc.otherNode)) : "left"
+      let outSide: Side = out.otherNode ? this.nearestSide(routerCenter, this.nodeCenter(out.otherNode)) : "right"
+      if (outSide === inSide) {
+        outSide = inSide === "left" ? "right" : inSide === "right" ? "left" : inSide === "top" ? "bottom" : "top"
       }
+      // incoming edge: the router is the toNode, so its side is inSide. (fromSide is the source
+      // frame's own side, read from edge data at render time; the stub here is unused for it.)
+      result.set(inc.edgeId, { fromSide: "right", toSide: inSide })
+      // outgoing edge: the router is the fromNode, so its side is outSide.
+      result.set(out.edgeId, { fromSide: outSide, toSide: "left" })
       return result
     }
 
