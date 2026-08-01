@@ -1,14 +1,15 @@
-# VN Canvas — Agent Handoff (current state: `main`)
+# VN Canvas — Agent Handoff (current state: `main`, includes `fixes/route-correctness`)
 
 ## What this plugin is
 
 A fork of obsidian-advanced-canvas, stripped to a **visual-novel dialogue graph editor**. Plugin id `vn-canvas`, deployed to `<vault>/.obsidian/plugins/vn-canvas/` via `npm run deploy`. Canvas nodes = dialogue frames, edges = routes. Data in `.canvas` files + `Dialogue/*.md` tables (Characters/Stats/Properties/Triggers), read by a Unity runtime.
 
 Branches:
-- `main` (CURRENT) — the VN fork, fully merged. All 5 problems below SOLVED and user-confirmed. Note: `main` is no longer the upstream Advanced Canvas — it's the VN fork trunk.
+- `main` (CURRENT) — the VN fork, fully merged. All 5 problems below SOLVED and user-confirmed, plus the route-type model / router-node coloring / dynamic edge-side routing from `fixes/route-correctness` (merged via fast-forward). Note: `main` is no longer the upstream Advanced Canvas — it's the VN fork trunk.
 - `new-logic` — VN fork base.
 - `vn/dialogue-fixes` — stable: TS fixes, rebrand, upstream cleanup, choice-anchor geometry, CPU fixes, drag-to-spawn, choice-port drag (delegates to native onConnectionPointerdown), occupied-port lock, spawn-cancel cleanup, sequential modal opening (choice → frame). Merged into `main`.
 - `vn/edge-split-router` — edge-split feature (double-click route edge → insert router node), color propagation, selection fixes. **Merged into `main` via fast-forward.** Tag `checkpoint-working-state-pre-atomic-split` (`4ec6cdc`) preserved for rolling back the atomic-split change if #3 regresses.
+- `fixes/route-correctness` — route-type model (`choice`/`unbound`/`broken`/`unknown`), router-node coloring (validity model + transit color), dynamic edge-side routing on router nodes, halved router node size (28→14px), arrowhead hiding on router endpoints. **Merged into `main` via fast-forward.** See sections below.
 
 ## How to deploy & test
 
@@ -20,18 +21,73 @@ npm run deploy          # build + copy to vault
 
 ## Architecture (key files)
 
-- `src/canvas-extensions/dialogue-choice-route-canvas-extension.ts` — route rendering, choice-port drag, edge-split, color, anchor geometry. **The file with the most active work.**
+- `src/canvas-extensions/dialogue-choice-route-canvas-extension.ts` — route rendering, choice-port drag, edge-split, color, anchor geometry, dynamic edge-side routing on router nodes. **The file with the most active work.**
 - `src/canvas-extensions/dialogue-frame-canvas-extension.ts` — frame rendering, choice ports (DOM), frame editor modal, spawn-cancel cleanup.
-- `src/canvas-extensions/dialogue-router-canvas-extension.ts` — router nodes, context menu, spawn menu (drag-to-spawn on empty), interaction-layer data attributes (resize-disable).
+- `src/canvas-extensions/dialogue-router-canvas-extension.ts` — router nodes, context menu, spawn menu (drag-to-spawn on empty), interaction-layer data attributes (resize-disable), **router-node coloring** (`resolveNodeColor`, `renderRouterNode`, `edgeRouteColor`).
+- `src/utils/dialogue-route-color.ts` — shared color helpers: `routeToColorCss`, `getRouteColorCss`, `resolveCssColor` (var→rgb), `resolveChoiceIndex`. Used by both route-render and router-node-color so they agree on colors.
 - `src/patchers/canvas-patcher.ts` — monkey-patches Obsidian Canvas, emits `advanced-canvas:*` events. `edge.render` patched → `edge-rendered:after`.
-- `src/styles.scss` — choice port CSS, router CSS, resize-disable, connection-point reposition.
+- `src/styles.scss` — choice port CSS, router CSS, resize-disable, connection-point reposition, dash patterns (`dashed-broken`/`dashed-unknown`/`short-dashed`), router-color CSS variable (`--dialogue-router-color`).
+- `src/@types/DialogueCanvas.ts` — `DialogueRouteType = "failure" | "choice" | "unbound" | "broken" | "unknown"`, plus `DialogueBrokenRouteData` / `DialogueUnknownRouteData`.
 
 ## Key concepts
 
 - **Route edge**: an edge with `x-dialogue.route = {type:"choice", choiceId, outcome, choiceIndex}` in its DATA. Only route edges are colored, splittable, and participate in dialogue routing. **Route must be in edge data, NOT applied as a visual hack at render time** (that was tried and failed — edges looked colored but couldn't be split).
 - **Choice port drag**: pointerdown on `.dialogue-canvas-choice-swatch` / `.dialogue-canvas-choice-failure-port` → delegates to `sourceNode.onConnectionPointerdown(event, "right")` for a native floating-end drag. `pendingChoiceRoute` remembers the choice; `onEdgeCreatedFromChoicePort` binds it via `saveRoute`.
 - **Edge-split**: double-click a route edge → insert router node at click point, split edge into two route edges (source→router, router→target), both carrying the route binding.
-- **Color propagation**: edges dragged FROM a router are **never grey** — they become route edges via the router-as-color-transit logic. Outgoing route = the router's single incoming choice route (inherited color), else `unbound` (neutral white). Reactive: `edge-created`/`edge-removed`/`edge-changed` → `scheduleRecomputeAllRouters` (rAF-coalesced full sweep). See problem #2.
+- **Color propagation**: edges dragged FROM a router are **never grey** — they become route edges via the router-as-color-transit logic. The outgoing route TYPE is resolved from the router's incoming set (see "Route-type model" below), then colored. Reactive: `edge-created`/`edge-removed`/`edge-changed` + `node-changed` → `scheduleRecomputeAllRouters` (rAF-coalesced full sweep over every router). See problem #2.
+
+---
+
+## Route-type model (`fixes/route-correctness`)
+
+A route edge carries `x-dialogue.route.type` of one of:
+- **`"choice"`** — bound to a specific choice (`choiceId` + `outcome` + cached `choiceIndex`). Renders as the choice's palette color (success: solid, failure: short-dashed).
+- **`"unbound"`** — a valid route line NOT bound to a choice. Solid neutral grey. A router with 0/multiple/mixed incoming emits `unbound` on its outgoing edges.
+- **`"broken"`** — the choice reference is invalid (choice was deleted from the source frame, or ALL incoming routes are themselves broken). Red dashed (`dashed-broken`). Propagates: if all incoming → broken, outgoing → broken.
+- **`"unknown"`** — the router has NO incoming route edges at all (no source upstream). Grey dashed (`dashed-unknown`). Distinct from unbound (solid grey, ambiguous-but-valid) — unknown is the "nothing connected" state.
+- **`"failure"`** — legacy/dead type, still in the union for migration safety. Treat as `choice` with `outcome: "failure"` where it appears.
+
+**Resolution** (`resolveOutgoingRoute`, `applyOutgoingRoute` in the route-canvas extension): for a router, count incoming route edges (choice + unbound count; broken propagates; unknown = "no source"):
+- exactly 1 resolvable incoming choice → inherit it (`choice` + that choiceId/outcome/choiceIndex → color)
+- exactly 1 incoming unbound, OR 0 incoming, OR 2+ mixed → `unbound`
+- ALL incoming broken → `broken`
+- NO incoming routes → `unknown`
+
+`applyOutgoingRoute` normalizes before persist (degrades an unresolved choice → unbound, preserves cached `choiceIndex`), and only writes when the route actually differs (`routesEqual`) — no infinite loop.
+
+---
+
+## Router-node coloring (`fixes/route-correctness`)
+
+Router nodes (14px dots, `x-dialogue.router.type = "point"`) are colored to reflect their connectivity state. CSS via `--dialogue-router-color` + `data-router-state` attribute. Computed in `resolveNodeColor` (router extension):
+
+- **`colored`** — the router is a clean transit: exactly 1 incoming + 1 outgoing route, and they carry the SAME color (resolved to rgb, not var-string compared — see lesson 18). Painted that color.
+- **`white`** — valid on both sides but ambiguous (multiple incoming, or in+out of different valid colors). Light color so the dot is visible on dark canvas.
+- **`warning`** (grey, opacity 0.55) — partially connected (only an in OR only an out, but no broken route). The "something's dangling" hint.
+- **`colored` red** — special case of partial: the one connected side is ALL broken → paint red so the broken state is visible even on a partially-connected router.
+
+**Validity model**: `choice`/`unbound`/`broken` are valid endpoints (carry a color); only `unknown` is invalid (no source → grey warning). A node is "colored" only when single in+out of the same color; everything else degrades to white/warning.
+
+**Color resolution** (`edgeRouteColor`): returns a concrete rgb color for `choice`/`unbound`/`broken`, null for `unknown` and default edges. Choice validation: if the choiceId doesn't resolve against the source frame's choices AND the source has choices, returns null (treated as broken upstream).
+
+---
+
+## Dynamic edge-side routing (`fixes/route-correctness`)
+
+Route edges attached to **router** nodes don't use a fixed face — the face is computed geometrically at render time so the line always points toward its neighbor. Only router nodes get dynamic sides; frame/target sides stay as stored in edge data (frame choice-port anchoring must stay). Computed per render-pass and cached in `routerSideCache: WeakMap<Canvas, WeakMap<CanvasNode, Map<string, {fromSide, toSide}>>>` so every edge of one router agrees within a pass.
+
+**Algorithm** (`computeRouterEdgeSides`, in route-canvas extension): walks a router's edges once, classifies incoming/outgoing, assigns sides:
+- Each edge attaches to the face nearest its own neighbor (source for incoming, target for outgoing). `nearestSide(from, to)` picks the axis (horizontal/vertical) with the larger delta, then the direction along it; ties go horizontal.
+- This was the final settled rule after two regressions (see "Edge-side history" below).
+
+**Render integration** (`renderRouteEdge`): for a router source, `fromSide` comes from `resolveRouterEdgeSide(...)` instead of `edge.from.side`; for a router target, `toSide` likewise. Arrowheads (`edge.fromLineEnd`/`edge.toLineEnd`) are hidden on router endpoints — a router is a transit point and the native arrowhead is positioned off our computed anchor anyway.
+
+**Re-render timing**: `renderCanvas` clears `routerSideCache` at the start of each pass. `node-moved` only triggers `scheduleRenderCanvas` on drag RELEASE (`usingKeyboard === true`), NOT per-move — per-move live updates were tried and were both slow and broke colors (reverted).
+
+**Edge-side history** (don't repeat these):
+- Axis-forcing (both edges onto one shared axis for 1-in/1-out): sent an edge to the wrong face when neighbors were on different axes → coils on roughly straight layouts.
+- U-turn flip (push output to opposite face when both neighbors shared a face): sent output AWAY from its target → loops on same-side layouts.
+- Final rule: plain "nearest face per edge" handles opposite-face (straight), perpendicular (smooth 90°), and same-face (short overlap on the shared face, reads fine for a 14px router) without special-casing.
 
 ---
 
@@ -147,3 +203,29 @@ Panning the canvas with the middle mouse button over an edge previously caused r
 16. **A reactive cascade that calls `setData` must guard against re-entrancy loops.** `setData` fires `edge-changed`, which our cascade listens to → would re-run the cascade → `setData` again → infinite loop. Guard with structural equality (`routesEqual`) so `applyOutgoingRoute` skips when the value didn't change: the second pass finds nothing to write and the chain terminates. Use a `visited` Set keyed by node id to protect against cycles in the node graph itself (router A → router B → router A).
 
 17. **"Unbound" is a first-class route kind, not a degenerate choice.** Routes that aren't tied to a specific choice (e.g. a router's outgoing line when the incoming color is ambiguous) still need to be real route edges — colored, splittable, participating in routing — just with a neutral color. Modeled as `type: "unbound"` rather than a choice with a sentinel choiceId, so the type system keeps choice-only code (`getChoiceRoute`, the binding modal) honest and the render path can branch cleanly.
+
+18. **Compare resolved rgb colors, never raw `var()` strings.** Different route types can map to visually-identical colors via different CSS variables (e.g. `--dialogue-route-unknown-color` and `--dialogue-route-unbound-color` are both grey but different strings). A `string === string` check would wrongly call them different and flip a router node to "ambiguous/white". Always resolve to concrete rgb first (`resolveCssColor`), then compare. (Bug behind router-node coloring flipping valid same-color nodes to white.)
+
+19. **Cached `choiceIndex` must not mask a broken choice.** A choice route's cached `choiceIndex` is a color hint set at bind time. If the choice was later deleted from the source frame, the cache would still hold a valid index and the edge would render in the choice color, hiding the broken reference. Only use the cache when the fromNode is a router (no choices to validate against); when the fromNode is a frame with choices, validate the choiceId against the live choices and degrade to `broken` if absent.
+
+20. **Edge-side routing: don't over-engineer.** For router-node edge sides, "nearest face per edge" is the correct default. Two attempts to be smarter both regressed: forcing both edges of a 1-in/1-out router onto one shared axis sent an edge to the wrong face when neighbors were on different axes; flipping the output to the opposite face when neighbors shared a face sent the output away from its target. Only special-case a genuine collision you can actually observe, not a hypothetical one. (See "Edge-side history" in the dynamic edge-side section.)
+
+---
+
+## PENDING / DEFERRED TASKS
+
+Items acknowledged but not yet done. Ordered roughly by priority.
+
+- **Validation command**: collect all `broken` / `unknown` route edges across the canvas and surface them as a list/modal, so the author can find every dangling route. Currently broken/unknown are only visible by their red/grey dashed lines on the canvas.
+- **Performance: `scheduleRecomputeAllRouters` is a full sweep.** Every `edge-changed` triggers a rAF-coalesced recompute of EVERY router (mitigated by `routesEqual` making the no-op case cheap). On large graphs this may need to become targeted (only the edge's `fromNode`/`toNode` + downstream). Separate exploration needed.
+- **`enforceSingleOutgoingEdge` history / determinism**: the spawn-edge-disappeared bug was fixed by capturing + removing the native drag edge, but the broader non-determinism in how Obsidian fires `edge-created` during a floating drag deserves a closer look.
+- **Self-loop on a router node (#6)**: a route edge whose both endpoints are the same router. Currently unhandled; likely renders as a degenerate path. Low priority until it shows up in real use.
+- **Dead `"failure"` route type**: `DialogueRouteType` still includes `"failure"` for migration safety, but it's effectively `choice` + `outcome:"failure"`. Audit whether any persisted data still uses bare `type:"failure"`; if not, remove from the union.
+- **Migration version**: the `x-dialogue` schema has grown (route types, router data) but there's no versioned migration step. If old `.canvas` files with bare `type:"failure"` exist, they'd need normalization.
+- **`getLinkedChoiceRoutes` ignores unbound**: the helper that walks a router's incoming edges to find a choice route ignores `unbound`/`broken`/`unknown`. Confirm this is intentional (it's used for the "inherit single choice" path) and not silently dropping valid cases.
+
+## KNOWN EDGE-SIDE LIMITATIONS (current state, user-accepted)
+
+The dynamic edge-side routing (nearest-face-per-edge) is the settled rule and the user has accepted the current behavior. Known limitations that were explored and left as-is:
+- **Same-face overlap**: when a router's two neighbors are on the SAME face, both edges attach to that face and briefly overlap on the 14px router. Reads fine in practice; the U-turn flip "fix" made it worse (loops).
+- **No live update during drag**: edge sides recompute only on drag RELEASE (`usingKeyboard === true`), not per-move. Per-move live update was slow and broke colors (reverted). If a node is dragged and the visual feels stale until release, this is why.
