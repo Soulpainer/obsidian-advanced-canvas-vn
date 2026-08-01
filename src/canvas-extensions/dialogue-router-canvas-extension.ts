@@ -627,16 +627,18 @@ export default class DialogueRouterCanvasExtension extends CanvasExtension {
     const hasOutgoing = outgoingColors.length > 0
 
     if (!hasIncoming || !hasOutgoing) {
-      // partially connected OR isolated → grey warning
-      return { color: "var(--dialogue-route-unknown-color)", state: "warning" }
+      // partially connected OR isolated → grey warning. Use a clearly MUTED grey (not the light
+      // unknown-line grey, which looks white on dark themes). --text-muted is mid-grey on both themes.
+      return { color: "var(--text-muted)", state: "warning" }
     }
 
     if (incomingColors.length === 1 && outgoingColors.length === 1 && incomingColors[0] === outgoingColors[0]) {
       return { color: incomingColors[0]!, state: "colored" }
     }
 
-    // valid on both sides but ambiguous → white
-    return { color: "var(--background-primary)", state: "white" }
+    // valid on both sides but ambiguous → white. Use an actual LIGHT color (not background-primary,
+    // which is the dark canvas bg on dark themes and makes the dot invisible).
+    return { color: "var(--text-normal)", state: "white" }
   }
 
   // LLM agent change: compute the RESOLVED rgb CSS color of a route edge, BUT ONLY for VALID choice

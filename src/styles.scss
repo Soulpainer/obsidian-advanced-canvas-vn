@@ -98,10 +98,20 @@
   inset: 5px;
 }
 
-// LLM agent change: the 'white' state (valid but ambiguous color) uses the background as the dot
-// color, which would be invisible — give it a subtle outline so the node is still clearly a router.
+// LLM agent change: distinguish the white/warning states visually — both use grey-ish colors but
+// must read differently. warning (partially connected / invalid) is dimmed via opacity so it looks
+// muted/empty; white (valid but ambiguous) is full-brightness. colored states are unaffected.
+.canvas-node.dialogue-canvas-router-node[data-router-state="warning"] {
+  > .canvas-node-container {
+    opacity: 0.55;
+  }
+}
+.canvas-node.dialogue-canvas-router-node[data-router-state="warning"]::after {
+  opacity: 0.55;
+}
 .canvas-node.dialogue-canvas-router-node[data-router-state="white"]::after {
-  box-shadow: inset 0 0 0 2px var(--text-muted);
+  // valid but ambiguous — solid, no inset outline needed now that the dot color is visible.
+  box-shadow: none;
 }
 
 .canvas-node-interaction-layer[data-is-selected-dialogue-router="true"] {
