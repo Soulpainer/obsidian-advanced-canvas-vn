@@ -1210,27 +1210,22 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
     const result = new Map<string, { fromSide: Side; toSide: Side }>()
 
     // Outgoing: each independently picks the face nearest its target.
-    let singleOutgoingSide: Side | null = null
     for (const out of outgoing) {
       const side = out.otherNode
         ? this.nearestSide(routerCenter, this.nodeCenter(out.otherNode))
         : ("right" as Side)
       result.set(out.edgeId, { fromSide: side, toSide: "left" })
-      if (outgoing.length === 1) {
-        singleOutgoingSide = side
-      }
     }
 
-    // Incoming: 1 → opposite of the single outgoing (if any); several → each nearest its source.
+    // LLM agent change: incoming edges each pick the face nearest their own source — the same rule
+    // as outgoing. (Previously a single incoming edge was forced to the OPPOSITE of the single
+    // outgoing edge, but that looked wrong on 1-in/1-out routers where both ends naturally wanted
+    // the near face to their respective neighbors. Treating incoming uniformly is simpler and
+    // matches what 'nearest point' should mean.)
     for (const inc of incoming) {
-      let side: Side
-      if (incoming.length === 1 && singleOutgoingSide) {
-        side = this.oppositeSide(singleOutgoingSide)
-      } else if (inc.otherNode) {
-        side = this.nearestSide(routerCenter, this.nodeCenter(inc.otherNode))
-      } else {
-        side = "left"
-      }
+      const side: Side = inc.otherNode
+        ? this.nearestSide(routerCenter, this.nodeCenter(inc.otherNode))
+        : "left"
       result.set(inc.edgeId, { fromSide: "right", toSide: side })
     }
 
@@ -1251,15 +1246,6 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
       return dx >= 0 ? "right" : "left"
     }
     return dy >= 0 ? "bottom" : "top"
-  }
-
-  private oppositeSide(side: Side): Side {
-    switch (side) {
-      case "right": return "left"
-      case "left": return "right"
-      case "top": return "bottom"
-      case "bottom": return "top"
-    }
   }
 
   private renderRouteEdge(canvas: Canvas, edge: CanvasEdge) {
