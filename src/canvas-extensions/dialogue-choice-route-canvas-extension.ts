@@ -926,36 +926,30 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
     canvas.pushHistory(canvas.getData())
     this.scheduleRenderCanvas(canvas)
 
-    // LLM agent change: select the router node. selectOnly() (synchronous, rAF-deferred, and
-    // setTimeout-deferred) all failed to put the node into canvas.selection in a state Obsidian's
-    // delete handler accepts (see handoff problem #1). Hypothesis: after importData the selection
-    // path is invalidated, not just delayed. So instead drive selection through the SAME native
-    // event-driven path a real click takes — synthesize pointerdown→pointerup→click on the node's
-    // body element. Deferred one rAF so the node is fully initialized/rendered (createTextNode's
-    // initialize is async vs our setData, see runAfterInitialized in the patcher).
+    // LLM agent change: select the router node. The previous attempt (synthesized pointerdown →
+    // pointerup → click on nodeEl) DID put the node into canvas.selection (selection.has returned
+    // true), but Delete still failed — and worse, it hid the original symptom. Reason: a
+    // programmatic dispatchEvent(click) is untrusted and does NOT move DOM focus. After importData,
+    // keyboard focus is not on the canvas, so the Delete keypress never reaches Obsidian's canvas
+    // delete handler. The user had to deselect+reselect (real clicks) to restore both selection
+    // AND focus. Fix: select via the API AND explicitly focus the canvas wrapper so the keypress
+    // lands. Deferred one rAF so the node is fully initialized (createTextNode's initialize is
+    // async vs our setData, see runAfterInitialized in the patcher).
     window.requestAnimationFrame(() => {
-      const nodeEl = (routerNode as any).nodeEl as HTMLElement | undefined
-      if (!nodeEl) {
-        // Fallback: if there's no DOM element yet, fall back to the direct API.
-        canvas.selectOnly(routerNode)
-        return
-      }
-
-      const rect = nodeEl.getBoundingClientRect()
-      const clientX = rect.left + rect.width / 2
-      const clientY = rect.top + rect.height / 2
-      const eventInit = { bubbles: true, cancelable: true, clientX, clientY, button: 0, view: window }
-
-      nodeEl.dispatchEvent(new PointerEvent("pointerdown", eventInit))
-      nodeEl.dispatchEvent(new PointerEvent("pointerup", eventInit))
-      nodeEl.dispatchEvent(new MouseEvent("click", eventInit))
+      canvas.selectOnly(routerNode)
+      canvas.wrapperEl?.focus()
 
       // [LLM agent TEMP] diagnostic — remove once selection-after-split is confirmed working.
-      // Tells us (in the console, Ctrl+Shift+I) whether the synthesized click actually put the
-      // router into Obsidian's selection set. If false, we'll know click-simulation didn't work
-      // and try a different approach (reorder / full-defer).
+      // Reports whether the router is selected AND whether the canvas wrapper holds DOM focus
+      // after the split (both needed for Delete to work). If focus is false, that's the missing
+      // piece; if Delete still fails with both true, the cause is elsewhere.
       // eslint-disable-next-line obsidianmd/rule-custom-message -- temporary diagnostic, removed once verified
-      console.log("[LLM agent TEMP] post-split selection has router:", canvas.selection.has(routerNode))
+      console.log(
+        "[LLM agent TEMP] post-split selection/focus:",
+        "selected=", canvas.selection.has(routerNode),
+        "focusOnWrapper=", activeDocument.activeElement === canvas.wrapperEl,
+        "activeTag=", activeDocument.activeElement?.tagName
+      )
     })
   }
 

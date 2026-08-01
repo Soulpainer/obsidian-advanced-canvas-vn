@@ -48,14 +48,18 @@ After edge-split creates a router node, `canvas.selectOnly(routerNode)` is calle
 - `createTextNode` instead of `importData` for the router node — the current approach, still broken.
 - `updateSelection(() => { deselectAll; selection.add(node) })` — **broke the entire canvas rendering** (reverted).
 
-**Current attempt (PENDING VERIFICATION):** replaced `selectOnly` with a **synthesized click** — rAF-deferred `PointerEvent("pointerdown")` → `PointerEvent("pointerup")` → `MouseEvent("click")` dispatched on `routerNode.nodeEl` at its bbox center. Rationale: since even rAF-deferred `selectOnly` failed, the issue is the *selection path*, not timing — driving it through Obsidian's native event-driven path (what a real click does) bypasses whatever `importData` invalidates. A `[LLM agent TEMP]` `console.log` reports `canvas.selection.has(routerNode)` post-click. **Awaiting deploy + manual test.** Fallback to `selectOnly` if `nodeEl` is missing.
+**Current attempt (PENDING VERIFICATION):** `selectOnly` + explicit `canvas.wrapperEl.focus()`. Reasoning, in order of what was ruled out:
+1. Synthesized click (`pointerdown→pointerup→click` via `dispatchEvent` on `nodeEl`) — **did** put the node into `canvas.selection` (`selection.has` returned `true`), but Delete still failed. Worse, it was a regression: the node looked selected, so the user had to deselect+reselect to make Delete work. Root cause: a programmatic `dispatchEvent(click)` is untrusted and does **not** move DOM focus, so the Delete keypress never reached Obsidian's canvas handler.
+2. So the missing piece is **DOM focus on the canvas**, not selection-set membership. After `importData`, keyboard focus is off-canvas; `selectOnly` alone doesn't restore it. Reverted to `selectOnly` and added `canvas.wrapperEl.focus()`.
+
+A `[LLM agent TEMP]` `console.log` now reports both `canvas.selection.has(routerNode)` AND `activeDocument.activeElement === canvas.wrapperEl` (plus the active tag) post-split. **Awaiting deploy + manual test.**
 
 **Key observation:** `createRouterNode` in `dialogue-router-canvas-extension.ts` (line ~350) does `canvas.selectOnly(node)` after `createTextNode` + `setData`, and it works there. The difference: in edge-split, we also call `removeEdge` + `importData` for the two new edges between `createTextNode` and `selectOnly`. One of those operations likely clears/invalidates selection.
 
-**Next steps to try (if click-sim fails):**
-- Reorder: `selectOnly` BEFORE `removeEdge`/`importData`.
-- Full-defer: wrap the entire split (`removeEdge` + `importData` + `selectOnly`) in a single `requestAnimationFrame`/`setTimeout(0)` — also the candidate fix for problem #3.
-- Compare with `spawnNodeAtDrop` in router-ext which also creates a node + edges and may or may not select — does Delete work there?
+**Next steps to try (if focus fix doesn't work):**
+- If `focusOnWrapper=true` but Delete still fails: the issue is deeper than focus — check `getSelectionData()` / what Obsidian's delete handler actually reads (maybe `selection` vs a derived snapshot).
+- Reorder: `selectOnly` + `focus()` BEFORE `removeEdge`/`importData`.
+- Full-defer: wrap the entire split (`removeEdge` + `importData` + `selectOnly` + `focus`) in a single `requestAnimationFrame`/`setTimeout(0)` — also the candidate fix for problem #3.
 
 ### 2. Edges dragged from router are grey / can't be split — HIGH
 
@@ -122,3 +126,5 @@ Panning the canvas with the middle mouse button while the cursor is over an edge
 13. **A router node has no `frame.choices`, so any `choices.findIndex(...)` in a code path that also serves routers returns -1.** Don't blanket-coerce that to 0 — it silently overwrites a legitimately-inherited/cached `choiceIndex`. When the route already carries a cached `choiceIndex` (set by a prior `saveRoute` or edge-split), preserve it; only fall back to 0 as a last resort. (Bug behind problem #2's wrong color on router-originated edges.)
 
 14. **`createTextNode` initialization is async relative to `setData`.** The patcher's `runAfterInitialized` defers `node-added`/`node-changed` until the native node `initialize()` runs, and the `setData` patch guards the `node-changed` trigger behind `node.initialized && !node.isDirty`. So `selectOnly` / render calls immediately after `createTextNode` + `setData` may run against a not-yet-initialized node. Defer with `requestAnimationFrame` if you need the fully-initialized node.
+
+15. **A synthesized `dispatchEvent(click)` is untrusted and does NOT move DOM focus.** It can put a node into `canvas.selection` (verified: `selection.has` returned `true`), but keyboard handlers (Delete/Backspace) still won't fire because focus is off-canvas. Worse, it masks the symptom — the node looks selected, so the user must deselect+reselect to recover. After canvas mutations that steal focus (`importData`, `removeEdge`), restore both `canvas.selectOnly(node)` AND `canvas.wrapperEl.focus()` if you need keyboard interaction. Don't try to fake clicks to drive selection.
