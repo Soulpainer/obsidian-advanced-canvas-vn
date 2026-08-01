@@ -8,7 +8,7 @@ Branches:
 - `main` — upstream Advanced Canvas.
 - `new-logic` — VN fork base.
 - `vn/dialogue-fixes` — stable: TS fixes, rebrand, upstream cleanup, choice-anchor geometry, CPU fixes, drag-to-spawn, choice-port drag (delegates to native onConnectionPointerdown), occupied-port lock, spawn-cancel cleanup, sequential modal opening (choice → frame).
-- `vn/edge-split-router` (CURRENT) — edge-split feature (double-click route edge → insert router node), color propagation, selection fixes. **#1 (post-split Delete) SOLVED, #2 (router as color transit) SOLVED, #3 (render-break on long edges) PREVENTATIVELY ADDRESSED via atomic importData (rollback tag `checkpoint-working-state-pre-atomic-split` if it regresses).**
+- `vn/edge-split-router` (CURRENT) — edge-split feature (double-click route edge → insert router node), color propagation, selection fixes. **ALL PROBLEMS SOLVED: #1 (post-split Delete), #2 (router as color transit), #3 (render-break, preventatively atomic), #4 (occupied ports), #5 (pan-over-edge lag). Ready to merge to main (fast-forward, 0 conflicts).**
 
 ## How to deploy & test
 
@@ -102,13 +102,13 @@ git reset --hard checkpoint-working-state-pre-atomic-split
 ```
 The pre-atomic version (with `createTextNode` + `setData`) is known-working for the user as of this writing; #3 was not observed there.
 
-### 4. Choice-port drag from OCCUPIED ports — LOW (mostly fixed)
+### 4. Choice-port drag from OCCUPIED ports — SOLVED ✅
 
-Occupied ports (with route) are dimmed via CSS (`pointer-events: none`) and the capture handler bails. This mostly works. Edge case: if CSS doesn't load or the class isn't applied, the JS guard is the fallback.
+Occupied ports (with route) are dimmed via CSS (`pointer-events: none`) and the capture handler bails. Confirmed working by the user. The JS guard remains as a fallback for the CSS-not-loaded edge case.
 
-### 5. Lag: route edges during pan-over-edge — LOW (deferred)
+### 5. Lag: route edges during pan-over-edge — SOLVED ✅ (pre-existing, fixed earlier)
 
-Panning the canvas with the middle mouse button while the cursor is over an edge causes route edges to lag/drift. This was a pre-existing issue. The geometry-only anchor fix (`getChoiceAnchorGeometric`) and synchronous `edge-rendered:after` rendering helped with drag/resize collapse, but the pan-over-edge lag persists. Our render code is NOT called during pan (logs confirmed), so the lag is likely from Obsidian's native edge re-rendering overwriting our path. May need a viewport-change listener that re-renders routes after pan settles.
+Panning the canvas with the middle mouse button over an edge previously caused route edges to lag/drift. Confirmed fixed by the user earlier in the branch's history (the geometry-only anchor fix + synchronous `edge-rendered:after` rendering resolved it). The viewport-change-listener idea in earlier drafts was not needed.
 
 ---
 
