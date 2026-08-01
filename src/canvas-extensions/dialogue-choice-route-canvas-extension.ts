@@ -926,29 +926,32 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
     canvas.pushHistory(canvas.getData())
     this.scheduleRenderCanvas(canvas)
 
-    // LLM agent change: select the router node. The previous attempt (synthesized pointerdown →
-    // pointerup → click on nodeEl) DID put the node into canvas.selection (selection.has returned
-    // true), but Delete still failed — and worse, it hid the original symptom. Reason: a
-    // programmatic dispatchEvent(click) is untrusted and does NOT move DOM focus. After importData,
-    // keyboard focus is not on the canvas, so the Delete keypress never reaches Obsidian's canvas
-    // delete handler. The user had to deselect+reselect (real clicks) to restore both selection
-    // AND focus. Fix: select via the API AND explicitly focus the canvas wrapper so the keypress
-    // lands. Deferred one rAF so the node is fully initialized (createTextNode's initialize is
-    // async vs our setData, see runAfterInitialized in the patcher).
+    // LLM agent change: select the router node. selectOnly + wrapperEl.focus() put the node into
+    // canvas.selection AND moved focus to the wrapper (verified: selected=true, focusOnWrapper=true),
+    // but Delete STILL failed — while a real click (deselect+reselect) works. So selection-set
+    // membership + DOM focus are necessary but not sufficient. Two remaining candidates:
+    //  (B) identity — importData (called for the two split edges after createTextNode) may have
+    //      recreated the node, so canvas.nodes holds a DIFFERENT object with the same id; our
+    //      selectOnly selects a ghost. Fix: re-fetch the live node by id and select THAT.
+    //  (C) nodeInteractionLayer.setTarget — a real click sets the interaction layer's target node
+    //      (fires advanced-canvas:node-interaction); Obsidian's delete path may rely on it, not
+    //      just the selection Set. Fix: call setTarget explicitly.
+    // Both applied here; the TEMP log reports identity so we learn which mattered.
     window.requestAnimationFrame(() => {
-      canvas.selectOnly(routerNode)
+      const liveNode = canvas.nodes.get(routerNode.getData().id) ?? routerNode
+      canvas.selectOnly(liveNode)
+      canvas.nodeInteractionLayer?.setTarget(liveNode)
       canvas.wrapperEl?.focus()
 
       // [LLM agent TEMP] diagnostic — remove once selection-after-split is confirmed working.
-      // Reports whether the router is selected AND whether the canvas wrapper holds DOM focus
-      // after the split (both needed for Delete to work). If focus is false, that's the missing
-      // piece; if Delete still fails with both true, the cause is elsewhere.
+      // identity=false would confirm importData recreated the node (hypothesis B). If identity=true
+      // but Delete now works, setTarget was the missing piece (hypothesis C).
       // eslint-disable-next-line obsidianmd/rule-custom-message -- temporary diagnostic, removed once verified
       console.log(
-        "[LLM agent TEMP] post-split selection/focus:",
-        "selected=", canvas.selection.has(routerNode),
-        "focusOnWrapper=", activeDocument.activeElement === canvas.wrapperEl,
-        "activeTag=", activeDocument.activeElement?.tagName
+        "[LLM agent TEMP] post-split:",
+        "identity=", liveNode === routerNode,
+        "selected=", canvas.selection.has(liveNode),
+        "focusOnWrapper=", activeDocument.activeElement === canvas.wrapperEl
       )
     })
   }

@@ -48,18 +48,22 @@ After edge-split creates a router node, `canvas.selectOnly(routerNode)` is calle
 - `createTextNode` instead of `importData` for the router node — the current approach, still broken.
 - `updateSelection(() => { deselectAll; selection.add(node) })` — **broke the entire canvas rendering** (reverted).
 
-**Current attempt (PENDING VERIFICATION):** `selectOnly` + explicit `canvas.wrapperEl.focus()`. Reasoning, in order of what was ruled out:
-1. Synthesized click (`pointerdown→pointerup→click` via `dispatchEvent` on `nodeEl`) — **did** put the node into `canvas.selection` (`selection.has` returned `true`), but Delete still failed. Worse, it was a regression: the node looked selected, so the user had to deselect+reselect to make Delete work. Root cause: a programmatic `dispatchEvent(click)` is untrusted and does **not** move DOM focus, so the Delete keypress never reached Obsidian's canvas handler.
-2. So the missing piece is **DOM focus on the canvas**, not selection-set membership. After `importData`, keyboard focus is off-canvas; `selectOnly` alone doesn't restore it. Reverted to `selectOnly` and added `canvas.wrapperEl.focus()`.
+**Current attempt (PENDING VERIFICATION):** re-fetch live node + `selectOnly` + `nodeInteractionLayer.setTarget` + `focus`. Ruled out so far (verified via console, all returned `true` but Delete still failed):
+1. **Selection-set membership** — `canvas.selection.has(routerNode)` is `true` after the split.
+2. **DOM focus** — `activeDocument.activeElement === canvas.wrapperEl` is `true` after `wrapperEl.focus()`.
 
-A `[LLM agent TEMP]` `console.log` now reports both `canvas.selection.has(routerNode)` AND `activeDocument.activeElement === canvas.wrapperEl` (plus the active tag) post-split. **Awaiting deploy + manual test.**
+So selection + focus are necessary but **not sufficient** — a real click does something more. Two remaining candidates being tested now:
+- **(B) Node identity** — `importData` (called for the two split edges *after* `createTextNode`) may have recreated the node, so `canvas.nodes` holds a different object with the same id; our `selectOnly` selects a ghost that the delete handler ignores. Fix: re-fetch `canvas.nodes.get(id)` and select that live node.
+- **(C) `nodeInteractionLayer.setTarget`** — a real click sets the interaction layer's target (fires `advanced-canvas:node-interaction`); Obsidian's delete path may rely on it. Fix: call `setTarget` explicitly.
+
+TEMP log now reports `identity` (`liveNode === routerNode`), so if it's `false`, hypothesis B is confirmed.
 
 **Key observation:** `createRouterNode` in `dialogue-router-canvas-extension.ts` (line ~350) does `canvas.selectOnly(node)` after `createTextNode` + `setData`, and it works there. The difference: in edge-split, we also call `removeEdge` + `importData` for the two new edges between `createTextNode` and `selectOnly`. One of those operations likely clears/invalidates selection.
 
-**Next steps to try (if focus fix doesn't work):**
-- If `focusOnWrapper=true` but Delete still fails: the issue is deeper than focus — check `getSelectionData()` / what Obsidian's delete handler actually reads (maybe `selection` vs a derived snapshot).
-- Reorder: `selectOnly` + `focus()` BEFORE `removeEdge`/`importData`.
-- Full-defer: wrap the entire split (`removeEdge` + `importData` + `selectOnly` + `focus`) in a single `requestAnimationFrame`/`setTimeout(0)` — also the candidate fix for problem #3.
+**Next steps to try (if both B and C fail):**
+- Check what Obsidian's delete handler actually reads — maybe `getSelectionData()` or a derived snapshot, not the live `selection` Set. Grep app.js for the delete keybind.
+- Reorder: `selectOnly` BEFORE `removeEdge`/`importData` (so importData doesn't touch the already-selected node).
+- Full-defer: wrap the entire split (`removeEdge` + `importData` + `selectOnly`) in a single `requestAnimationFrame`/`setTimeout(0)` — also the candidate fix for problem #3.
 
 ### 2. Edges dragged from router are grey / can't be split — HIGH
 
