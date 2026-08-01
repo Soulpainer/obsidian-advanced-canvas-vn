@@ -266,11 +266,21 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
     }))
     this.plugin.registerEvent(this.plugin.app.workspace.on(
       "advanced-canvas:node-moved",
-      (canvas: Canvas, node: CanvasNode) => this.renderNodeRoutes(canvas, node)
+      (canvas: Canvas, node: CanvasNode) => {
+        this.renderNodeRoutes(canvas, node)
+        // LLM agent change: a node move changes the GEOMETRY that router edge-side assignment
+        // depends on (nearest face / opposite-of-output), even for routers that aren't themselves
+        // moving but are connected to the moved node. A full renderCanvas recomputes all router
+        // edge sides (the cache is cleared at its start). Coalesced via rAF so rapid drag is cheap.
+        this.scheduleRenderCanvas(canvas)
+      }
     ))
     this.plugin.registerEvent(this.plugin.app.workspace.on(
       "advanced-canvas:node-resized",
-      (canvas: Canvas, node: CanvasNode) => this.renderNodeRoutes(canvas, node)
+      (canvas: Canvas, node: CanvasNode) => {
+        this.renderNodeRoutes(canvas, node)
+        this.scheduleRenderCanvas(canvas)
+      }
     ))
     this.plugin.registerEvent(this.plugin.app.workspace.on(
       "advanced-canvas:edge-connection-dragging:before",
