@@ -183,7 +183,7 @@ export interface DialogueAnswerEditorValue extends DialogueAnswerData {
   text: string
 }
 
-export type DialogueRouteType = "failure" | "choice"
+export type DialogueRouteType = "failure" | "choice" | "unbound"
 export type DialogueChoiceRouteOutcome = "success" | "failure"
 
 export interface DialogueFailureRouteData {
@@ -196,6 +196,14 @@ export interface DialogueFailureRouteData {
   // when the edge's fromNode is a router (no choices) so renderRouteEdge can still apply the
   // correct color without walking back to the source frame.
   choiceIndex?: number
+}
+
+// LLM agent change: an "unbound" route edge is a valid route line (colored, splittable) that is
+// NOT bound to a specific choice — e.g. an edge leaving a router that has zero or multiple
+// incoming route edges. It renders as a neutral white/grey line. It behaves like a choice route
+// in every way except color/choice binding.
+export interface DialogueUnboundRouteData {
+  type: "unbound"
 }
 
 export interface DialogueRouteData {

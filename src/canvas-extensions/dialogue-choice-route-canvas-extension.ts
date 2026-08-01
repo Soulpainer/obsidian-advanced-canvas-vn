@@ -13,6 +13,7 @@ import {
   DialogueEdgeData,
   DialogueFailureRouteData,
   DialogueNodeData,
+  DialogueUnboundRouteData,
 } from "src/@types/DialogueCanvas"
 import CanvasHelper from "src/utils/canvas-helper"
 import CanvasExtension from "./canvas-extension"
@@ -43,6 +44,10 @@ type DialogueChoiceRouteData = DialogueFailureRouteData & {
   choiceId: string
   outcome: DialogueChoiceRouteOutcome
 }
+
+// LLM agent change: any route (choice OR unbound). Used where we care "is this a route edge at all"
+// regardless of whether it's bound to a specific choice.
+type DialogueRouteData = DialogueChoiceRouteData | DialogueUnboundRouteData
 
 class EditDialogueChoiceRouteModal extends Modal {
   private choiceId: string
@@ -215,6 +220,14 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
       "advanced-canvas:edge-created",
       (canvas: Canvas, edge: CanvasEdge) => this.onEdgeCreatedFromChoicePort(canvas, edge)
     ))
+    // LLM agent change: recompute router-transit colors reactively. When an edge is added, removed,
+    // or its route changes, a router whose incoming/outgoing set changed may need its outgoing
+    // edges recolored (and the change may cascade downstream). The cascade is guarded by a visited
+    // set so cycles in the router graph are safe.
+    const recomputeAffected = (canvas: Canvas, edge: CanvasEdge) => this.onEdgeRouteAffected(canvas, edge)
+    this.plugin.registerEvent(this.plugin.app.workspace.on("advanced-canvas:edge-created", recomputeAffected))
+    this.plugin.registerEvent(this.plugin.app.workspace.on("advanced-canvas:edge-removed", recomputeAffected))
+    this.plugin.registerEvent(this.plugin.app.workspace.on("advanced-canvas:edge-changed", recomputeAffected))
     // LLM agent change: double-clicking a route edge inserts a route node at the click point,
     // splitting the edge into two (source→router, router→target) so the route styling is preserved.
     this.plugin.registerEvent(this.plugin.app.workspace.on(
@@ -580,7 +593,7 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
     for (const edge of canvas.edges.values()) {
       const edgeData = edge.getData() as CanvasEdgeDataWithDialogue
 
-      if (!this.getChoiceRoute(edgeData["x-dialogue"]?.route)) {
+      if (!this.getRoute(edgeData["x-dialogue"]?.route)) {
         this.setEdgeLabelVisible(edge, true)
         // LLM agent change: default (non-route) edges that leave a choice frame from its right
         // side are re-anchored to the upper quarter of that side, where the visible default
@@ -602,7 +615,7 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
     // LLM agent change: only re-anchor DEFAULT edges (no route). Route edges have their own anchor
     // (getChoiceAnchor) handled by renderRouteEdge; re-anchoring them here collapsed all routes to
     // the upper-quarter point.
-    if (this.getChoiceRoute(edgeData["x-dialogue"]?.route)) {
+    if (this.getRoute(edgeData["x-dialogue"]?.route)) {
       return
     }
     if (edgeData.fromSide !== "right" || !edge.bezier || !edgeData.fromNode) {
@@ -641,7 +654,7 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
     for (const edge of canvas.edges.values()) {
       const edgeData = edge.getData() as CanvasEdgeDataWithDialogue
 
-      if (edgeData.fromNode !== sourceNode.id || !this.getChoiceRoute(edgeData["x-dialogue"]?.route)) {
+      if (edgeData.fromNode !== sourceNode.id || !this.getRoute(edgeData["x-dialogue"]?.route)) {
         continue
       }
 
@@ -784,18 +797,41 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
       return
     }
 
-    // LLM agent change: if there's no pending choice, but the edge's fromNode is a router, inherit
-    // the route from an incoming route edge to that router. This makes edges dragged FROM a router
-    // colored and splittable — they carry the same route as the incoming edge. If no incoming
-    // route exists, the edge stays a plain grey connection.
+    // LLM agent change: if there's no pending choice, but the edge's fromNode is a router, make it
+    // a route edge of the correct kind via the shared router-transit logic: exactly one incoming
+    // choice route → inherit its color; otherwise → unbound (neutral white). A line leaving a router
+    // is NEVER a plain default (grey) edge — that was the observed bug (grey, unsplittable).
     if (!pending && edgeData.fromNode) {
       const fromNode = canvas.nodes.get(edgeData.fromNode)
       const fromData = fromNode?.getData() as CanvasNodeDataWithDialogue | undefined
-      if (fromData?.["x-dialogue"]?.router) {
-        const inherited = this.findInheritedRoute(canvas, edgeData.fromNode)
-        if (inherited && fromNode) {
-          this.saveRoute(canvas, edge, fromNode, inherited)
-        }
+      if (fromData?.["x-dialogue"]?.router && fromNode) {
+        const targetRoute = this.resolveOutgoingRoute(canvas, edgeData.fromNode)
+        this.applyOutgoingRoute(canvas, edge, targetRoute)
+        canvas.pushHistory(canvas.getData())
+        this.plugin.app.workspace.trigger("advanced-canvas:dialogue-choice-route-changed", canvas, fromNode)
+        this.scheduleRenderCanvas(canvas)
+      }
+    }
+  }
+
+  // LLM agent change: reactive router-transit recoloring. Fired on edge-created/removed/changed.
+  // For an affected edge, the router whose incoming set may have changed is its toNode (an edge
+  // feeding INTO a router changes that router's outgoing color). We also recompute the fromNode if
+  // it's a router, in case the edge itself changed (e.g. its choice binding via modal). Each
+  // recompute cascades downstream with a shared visited set. Reads fromNode/toNode from the edge's
+  // own data so it works even on edge-removed (edge already gone from canvas.edges, but data alive).
+  private onEdgeRouteAffected(canvas: Canvas, edge: CanvasEdge) {
+    const edgeData = edge.getData() as CanvasEdgeDataWithDialogue
+    const visited = new Set<string>()
+
+    for (const nodeId of [edgeData.toNode, edgeData.fromNode]) {
+      if (!nodeId) {
+        continue
+      }
+      const node = canvas.nodes.get(nodeId)
+      const nodeData = node?.getData() as CanvasNodeDataWithDialogue | undefined
+      if (node && nodeData?.["x-dialogue"]?.router) {
+        this.recomputeRouterOutgoing(canvas, node, visited)
       }
     }
   }
@@ -806,7 +842,7 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
 
       if (
         (edgeData.fromNode !== node.id && edgeData.toNode !== node.id) ||
-        !this.getChoiceRoute(edgeData["x-dialogue"]?.route)
+        !this.getRoute(edgeData["x-dialogue"]?.route)
       ) {
         continue
       }
@@ -842,7 +878,7 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
     }
 
     const edgeData = clickedEdge.getData() as CanvasEdgeDataWithDialogue
-    const route = this.getChoiceRoute(edgeData["x-dialogue"]?.route)
+    const route = this.getRoute(edgeData["x-dialogue"]?.route)
     if (!route || !edgeData.fromNode || !edgeData.toNode) {
       return
     }
@@ -854,15 +890,28 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
     const routerSize = 28
     const sourceNodeId = edgeData.fromNode!
     const targetNodeId = edgeData.toNode!
-    const oldEdgeId = clickedEdge.getData().id
 
-    // LLM agent change: use the cached choiceIndex from route data if present (set by saveRoute
-    // or a prior split). Avoids re-looking-up the choice on the source — fails when source is a
-    // router (no choices), defaulting to 0 = wrong color.
-    const choiceIndex = route.choiceIndex !== undefined
-      ? route.choiceIndex
-      : Math.max(this.getChoiceIndex(canvas, sourceNodeId, route.choiceId!), 0)
-    const colorId = this.getRouteCanvasColorId(choiceIndex)
+    // LLM agent change: build the route payload carried by BOTH split halves — identical to the
+    // original route (choice stays choice with its binding, unbound stays unbound). For choice
+    // routes we also resolve/refresh choiceIndex so the color is preserved across the split.
+    let splitRoute: DialogueRouteData
+    let colorId: `${number}` | undefined
+    if (route.type === "unbound") {
+      splitRoute = { type: "unbound" }
+      // Unbound edges don't carry a palette color id; renderRouteEdge paints them via CSS var.
+      colorId = undefined
+    } else {
+      const choiceIndex = route.choiceIndex !== undefined
+        ? route.choiceIndex
+        : Math.max(this.getChoiceIndex(canvas, sourceNodeId, route.choiceId!), 0)
+      splitRoute = {
+        type: "choice",
+        choiceId: route.choiceId,
+        outcome: route.outcome,
+        choiceIndex,
+      }
+      colorId = this.getRouteCanvasColorId(choiceIndex)
+    }
 
     // LLM agent change: create the router node via createTextNode (not importData) so it's a
     // fully-managed CanvasNode that selectOnly/Delete works on. We add x-dialogue data right after.
@@ -889,34 +938,28 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
     const routerId = routerNode.getData().id
     const stamp = Date.now()
 
+    // LLM agent change: helper to build each split half's data. Both halves carry the SAME route as
+    // the original edge; color is only set for choice routes (unbound is rendered via CSS var).
+    const buildSplitEdge = (edgeId: string, fromNode: string, toNode: string): CanvasEdgeDataWithDialogue => ({
+      id: edgeId,
+      fromNode,
+      fromSide: "right" as Side,
+      toNode,
+      toSide: "left" as Side,
+      ...(colorId !== undefined ? { color: colorId } : {}),
+      ["x-dialogue"]: {
+        route: splitRoute,
+      },
+    })
+
     // Build the two edges (node already exists via createTextNode).
     const importPayload = {
       nodes: [],
       edges: [
         // edge-1: source → router
-        {
-          id: `split-${stamp}-1`,
-          fromNode: sourceNodeId,
-          fromSide: "right" as Side,
-          toNode: routerId,
-          toSide: "left" as Side,
-          color: colorId,
-          ["x-dialogue"]: {
-            route: { type: "choice", choiceId: route.choiceId, outcome: route.outcome, choiceIndex },
-          },
-        },
+        buildSplitEdge(`split-${stamp}-1`, sourceNodeId, routerId),
         // edge-2: router → target
-        {
-          id: `split-${stamp}-2`,
-          fromNode: routerId,
-          fromSide: "right" as Side,
-          toNode: targetNodeId,
-          toSide: "left" as Side,
-          color: colorId,
-          ["x-dialogue"]: {
-            route: { type: "choice", choiceId: route.choiceId, outcome: route.outcome, choiceIndex },
-          },
-        },
+        buildSplitEdge(`split-${stamp}-2`, routerId, targetNodeId),
       ],
     }
 
@@ -963,7 +1006,7 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
 
   private renderRouteEdge(canvas: Canvas, edge: CanvasEdge) {
     const edgeData = edge.getData() as CanvasEdgeDataWithDialogue
-    const route = this.getChoiceRoute(edgeData["x-dialogue"]?.route)
+    const route = this.getRoute(edgeData["x-dialogue"]?.route)
 
     if (!route || !edge.bezier || !edgeData.fromNode) {
       return
@@ -972,26 +1015,42 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
     this.setEdgeLabelVisible(edge, false)
 
     const sourceNode = canvas.nodes.get(edgeData.fromNode)
-    const sourceNodeData = sourceNode?.getData() as CanvasNodeDataWithDialogue | undefined
-    const choices = sourceNodeData?.["x-dialogue"]?.frame?.choices ?? []
-    let choiceIndex = choices.findIndex(choice => choice.choiceId === route.choiceId)
+    if (!sourceNode) {
+      return
+    }
+    const sourceNodeData = sourceNode.getData() as CanvasNodeDataWithDialogue
+    const choices = sourceNodeData["x-dialogue"]?.frame?.choices ?? []
 
-    // LLM agent change: if fromNode is a router (no choices), fall back to the cached choiceIndex
-    // stored in the route data by saveRoute. This keeps the color correct for split edges.
-    if (choiceIndex < 0 && route.choiceIndex !== undefined) {
-      choiceIndex = route.choiceIndex
+    // LLM agent change: resolve the visual color for this edge. Choice routes compute an index from
+    // the source's choices (falling back to a cached choiceIndex when the source is a router);
+    // unbound routes have a single neutral color regardless of source.
+    let colorCss: string
+    let isFailure = false
+    if (route.type === "unbound") {
+      colorCss = this.getRouteColorCss(-1, "success")
+    } else {
+      let choiceIndex = choices.findIndex(choice => choice.choiceId === route.choiceId)
+      // LLM agent change: if fromNode is a router (no choices), fall back to the cached choiceIndex
+      // stored in the route data by saveRoute. This keeps the color correct for split edges.
+      if (choiceIndex < 0 && route.choiceIndex !== undefined) {
+        choiceIndex = route.choiceIndex
+      }
+      if (choiceIndex < 0) {
+        // Choice route whose choice can't be resolved — render as unbound so it's at least visible.
+        colorCss = this.getRouteColorCss(-1, "success")
+      } else {
+        colorCss = this.getRouteColorCss(choiceIndex, route.outcome)
+        isFailure = route.outcome === "failure"
+      }
     }
 
     // For router-source nodes, use the bbox center as anchor (no choice port to anchor to).
     const isRouterSource = choices.length === 0
 
-    if (!sourceNode || choiceIndex < 0) {
-      return
-    }
-
     // LLM agent change: anchor choice — frame source anchors to the choice port, router source
-    // anchors to its bbox edge center (routers have no choice ports).
-    const anchor = isRouterSource
+    // anchors to its bbox edge center (routers have no choice ports). Unbound routes always use
+    // the bbox-center anchor (they have no choice port by definition).
+    const anchor = (isRouterSource || route.type === "unbound")
       ? this.getRouterAnchor(sourceNode, edge.from.side)
       : this.getChoiceAnchor(canvas, sourceNode, route.choiceId!, route.outcome!)
     const target = this.getEdgeTargetAnchor(canvas, edge, edgeData)
@@ -1004,7 +1063,7 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
     edge.path.interaction.setAttr("d", path)
     edge.path.display.setAttr("d", path)
 
-    if (route.outcome === "failure") {
+    if (isFailure) {
       edge.path.display.setAttr("data-path", "short-dashed")
       edge.path.interaction.setAttr("data-path", "short-dashed")
     } else {
@@ -1012,25 +1071,146 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
       edge.path.interaction.removeAttribute("data-path")
     }
 
-    this.applyEdgeColor(edge, this.getRouteColorCss(choiceIndex, route.outcome))
+    this.applyEdgeColor(edge, colorCss)
     // LLM agent change: do not re-render the native label from our route renderer; it can recursively trigger edge renders.
     this.setEdgeLabelVisible(edge, false)
   }
 
-  // LLM agent change: find a route binding to inherit for a router's outgoing edge. Looks at all
-  // edges whose toNode is the router and returns the first route found. Used so edges dragged
-  // from a router inherit the route (and thus color/splittability) of an incoming route edge.
-  private findInheritedRoute(canvas: Canvas, routerId: string): DialogueChoiceRouteData | null {
+  // LLM agent change: resolve the route that a router's OUTGOING edge should carry, based on the
+  // router's incoming route edges. Rules (counting only route edges — choice + unbound; default
+  // grey edges are ignored):
+  //   - exactly 1 incoming CHOICE route → inherit it (same choiceId/outcome/choiceIndex → color)
+  //   - exactly 1 incoming UNBOUND route, or 0, or 2+, or mixed → UNBOUND (neutral white line)
+  // This is the heart of the "router as a color transit" feature: an outgoing line is never grey,
+  // and it only carries a choice's color when that choice is unambiguous.
+  private resolveOutgoingRoute(canvas: Canvas, routerId: string): DialogueRouteData {
+    let choiceCount = 0
+    let lastChoice: DialogueChoiceRouteData | null = null
+
     for (const edge of canvas.edges.values()) {
       const data = edge.getData() as CanvasEdgeDataWithDialogue
-      if (data.toNode === routerId) {
-        const route = this.getChoiceRoute(data["x-dialogue"]?.route)
-        if (route) {
-          return route
+      if (data.toNode !== routerId) {
+        continue
+      }
+      const route = this.getRoute(data["x-dialogue"]?.route)
+      if (!route) {
+        continue
+      }
+      if (route.type === "choice") {
+        choiceCount++
+        lastChoice = route
+      } else {
+        // incoming unbound → immediately unbound (mixed/unambiguous-unbound both → unbound)
+        return { type: "unbound" }
+      }
+    }
+
+    if (choiceCount === 1 && lastChoice) {
+      return { ...lastChoice }
+    }
+    return { type: "unbound" }
+  }
+
+  // LLM agent change: set an outgoing edge's route to the resolved value WITHOUT pushing history or
+  // triggering the choice-route-changed event (the cascade caller does that once at the end, so we
+  // get a single history entry for a whole cascade, not one per edge). Returns true if the edge
+  // actually changed (so the caller knows whether to continue the cascade downstream).
+  private applyOutgoingRoute(canvas: Canvas, edge: CanvasEdge, route: DialogueRouteData): boolean {
+    const edgeData = edge.getData() as CanvasEdgeDataWithDialogue
+    const existing = this.getRoute(edgeData["x-dialogue"]?.route)
+
+    // Skip if already correct — prevents infinite cascade loops (setData → edge-changed → recompute).
+    if (existing && this.routesEqual(existing, route)) {
+      return false
+    }
+
+    // Resolve the choiceIndex for color, mirroring saveRoute's logic.
+    let choiceIndex = -1 // -1 = unbound (neutral color)
+    let isFailure = false
+    if (route.type === "choice") {
+      const sourceNode = edgeData.fromNode ? canvas.nodes.get(edgeData.fromNode) : undefined
+      const sourceNodeData = sourceNode?.getData() as CanvasNodeDataWithDialogue | undefined
+      const choices = sourceNodeData?.["x-dialogue"]?.frame?.choices ?? []
+      choiceIndex = choices.findIndex(choice => choice.choiceId === route.choiceId)
+      if (choiceIndex < 0 && route.choiceIndex !== undefined) {
+        choiceIndex = route.choiceIndex
+      }
+      if (choiceIndex < 0) {
+        choiceIndex = -1 // unresolved choice → render as unbound (visible, not blue)
+      } else {
+        isFailure = route.outcome === "failure"
+      }
+    }
+
+    const nextXDialogue: DialogueEdgeData = {
+      ...edgeData["x-dialogue"],
+      route,
+    }
+    delete nextXDialogue.answer
+
+    const nextEdgeData: CanvasEdgeDataWithDialogue = {
+      ...edgeData,
+      label: "",
+      styleAttributes: {
+        ...edgeData.styleAttributes,
+        path: isFailure ? "short-dashed" : null,
+      },
+      "x-dialogue": nextXDialogue,
+    }
+
+    edge.setData(nextEdgeData)
+    return true
+  }
+
+  // LLM agent change: structural equality for routes — used by applyOutgoingRoute to skip no-op
+  // updates (which would otherwise loop the cascade: setData → edge-changed → recompute → setData).
+  private routesEqual(a: DialogueRouteData, b: DialogueRouteData): boolean {
+    if (a.type !== b.type) {
+      return false
+    }
+    if (a.type === "choice" && b.type === "choice") {
+      return a.choiceId === b.choiceId && a.outcome === b.outcome
+    }
+    // both unbound
+    return true
+  }
+
+  // LLM agent change: recompute the outgoing route color of every edge leaving a router, based on
+  // the router's current incoming routes, then cascade downstream: if an outgoing edge's target is
+  // itself a router, its outgoing color may have changed too. `visited` guards against cycles in
+  // the router graph. Recomputes only router nodes — frames/regular nodes are unaffected.
+  private recomputeRouterOutgoing(canvas: Canvas, routerNode: CanvasNode, visited: Set<string>) {
+    const routerId = routerNode.getData().id
+    if (visited.has(routerId)) {
+      return
+    }
+    visited.add(routerId)
+
+    const targetRoute = this.resolveOutgoingRoute(canvas, routerId)
+    let anyChanged = false
+
+    for (const edge of canvas.edges.values()) {
+      const data = edge.getData() as CanvasEdgeDataWithDialogue
+      if (data.fromNode !== routerId) {
+        continue
+      }
+      if (this.applyOutgoingRoute(canvas, edge, targetRoute)) {
+        anyChanged = true
+        // Cascade: if this edge leads to another router, that router's incoming set changed.
+        const downstreamId = data.toNode
+        if (downstreamId) {
+          const downstream = canvas.nodes.get(downstreamId)
+          const downstreamData = downstream?.getData() as CanvasNodeDataWithDialogue | undefined
+          if (downstream && downstreamData?.["x-dialogue"]?.router) {
+            this.recomputeRouterOutgoing(canvas, downstream, visited)
+          }
         }
       }
     }
-    return null
+
+    if (anyChanged) {
+      this.scheduleRenderCanvas(canvas)
+    }
   }
 
   // LLM agent change: anchor for a router node — center of the given side of its bbox.
@@ -1207,6 +1387,12 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
   }
 
   private getRouteColorCss(choiceIndex: number, outcome: DialogueChoiceRouteOutcome): string {
+    // LLM agent change: choiceIndex < 0 means "unbound" — a route edge not tied to a specific choice
+    // (e.g. leaving a router with zero/multiple incoming routes). Returns the neutral unbound color.
+    if (choiceIndex < 0) {
+      return "var(--dialogue-route-unbound-color)"
+    }
+
     const colorIndex = choiceIndex % 8 + 1
 
     if (outcome === "failure") {
@@ -1241,6 +1427,16 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
     }
 
     return route as DialogueChoiceRouteData
+  }
+
+  // LLM agent change: any route (choice OR unbound). Returns the route object if this edge is a
+  // route edge of any kind — used to decide "is this a route line at all" regardless of choice
+  // binding. Unbound routes (type "unbound") are routes too, just not bound to a specific choice.
+  private getRoute(route: DialogueFailureRouteData | undefined): DialogueRouteData | undefined {
+    if (route?.type === "unbound") {
+      return route as DialogueUnboundRouteData
+    }
+    return this.getChoiceRoute(route)
   }
 
   private getSelectedEdges(canvas: Canvas): CanvasEdge[] {

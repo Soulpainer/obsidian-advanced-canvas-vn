@@ -23,6 +23,16 @@
   --dialogue-choice-failure-color-8: #4d7c0f;
 }
 
+// LLM agent change: unbound route color — a route edge NOT bound to a specific choice (e.g. leaving
+// a router with zero/multiple incoming routes). Themed so it stays visible on both light and dark
+// backgrounds (pure #fff would vanish on a light theme). Grey-ish: distinct from any choice color.
+.theme-light {
+  --dialogue-route-unbound-color: #6b7280;
+}
+.theme-dark {
+  --dialogue-route-unbound-color: #d1d5db;
+}
+
 .canvas-node.dialogue-canvas-frame-node {
   overflow: visible;
 }
