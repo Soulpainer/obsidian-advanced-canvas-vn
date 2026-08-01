@@ -301,7 +301,7 @@ Runtime should not display routing points as dialogue frames.
 When resolving graph flow, routing points are transparent nodes:
 
 1. Enter route point.
-2. Follow its single outgoing edge.
+2. Follow its single outgoing edge (this edge may be `type: "choice"` or `type: "unbound"` — follow it the same way regardless).
 3. Continue until a dialogue frame or terminal is reached.
 
 The editor enforces one outgoing edge from a route point, but Unity should still validate this.
@@ -419,7 +419,8 @@ Edges connect a source node to a target node. Choice binding is stored on the ed
     "route": {
       "type": "choice",
       "choiceId": "1",
-      "outcome": "success"
+      "outcome": "success",
+      "choiceIndex": 0
     }
   }
 }
@@ -428,10 +429,13 @@ Edges connect a source node to a target node. Choice binding is stored on the ed
 Route shape:
 
 ```ts
+type DialogueRouteType = "choice" | "unbound"
+
 interface DialogueChoiceRouteData {
   type: "choice"
   choiceId: string
   outcome: "success" | "failure"
+  choiceIndex?: number   // editor-only cache: index of the choice in sourceFrame.choices (0-based). Safe to ignore at runtime.
 }
 ```
 
@@ -442,6 +446,7 @@ Interpretation:
 - `outcome: "failure"` is used when checks/conditions fail.
 - A choice can have a success edge, a failure edge, both, or neither.
 - Multiple choices can route to the same target node.
+- `choiceIndex` is a cached editor value for coloring the edge; the runtime should NOT rely on it for logic (use `choiceId`). It may be absent on some edges.
 
 Recommended Unity route lookup:
 
@@ -450,6 +455,34 @@ routesBySourceNode[sourceNodeId][choiceId][outcome] = edge.toNode
 ```
 
 If `edge.toNode` is a routing point, resolve through routing points until a frame node is reached.
+
+## Unbound Routes
+
+<!-- LLM agent change: documented the "unbound" route type added by the router-as-color-transit feature. -->
+
+An **unbound** route edge is a valid route line that is NOT bound to a specific choice. It is produced by the editor when an edge leaves a routing point whose incoming color is ambiguous (zero, multiple, or mixed incoming routes) — or leaves a routing point with no incoming routes at all.
+
+```json
+{
+  "x-dialogue": {
+    "route": {
+      "type": "unbound"
+    }
+  }
+}
+```
+
+```ts
+interface DialogueUnboundRouteData {
+  type: "unbound"
+}
+```
+
+Runtime interpretation:
+
+- An unbound edge is a **real route edge**, not a plain/decorative line. Treat it as a valid transition.
+- It has no `choiceId` / `outcome` — it does not originate from a specific choice. It typically appears on the outgoing side of a routing point (see below).
+- When resolving graph flow at a routing point: the outgoing edge may be choice OR unbound. Follow it the same way — a routing point has exactly one outgoing edge, so resolve through it regardless of type.
 
 ## Actions
 
@@ -603,11 +636,13 @@ object ResolveActionValue(object rawValue) {
    - `frameNodesByFrameId`
    - `routerNodesByNodeId`
 
-4. Build route maps from edges with:
+4. Build route maps from edges. Include every edge that carries a route of any type:
 
 ```txt
-edge["x-dialogue"].route.type == "choice"
+edge["x-dialogue"].route.type == "choice" || edge["x-dialogue"].route.type == "unbound"
 ```
+
+For `choice` routes, key by `choiceId`/`outcome`. For `unbound` routes (which originate from routing points with ambiguous or no incoming color), treat them as valid transitions when resolving router flow. Do NOT silently drop `unbound` edges — they are real route lines produced by the editor.
 
 5. Resolve router nodes in route targets.
 

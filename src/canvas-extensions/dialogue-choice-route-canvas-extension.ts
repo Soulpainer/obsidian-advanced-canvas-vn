@@ -427,6 +427,12 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
     sourceNode: CanvasNode,
     route: DialogueChoiceRouteData
   ) {
+    // LLM agent change (#2 fix): never mutate route data on a readonly canvas. This is called from
+    // the bind-route modal, onEdgeNeedsRoute, onEdgeCreatedFromChoicePort, and createLinkedFrame —
+    // none of which should write on a locked canvas.
+    if (canvas.readonly) {
+      return
+    }
     const edgeData = edge.getData() as CanvasEdgeDataWithDialogue
     const sourceNodeData = sourceNode.getData() as CanvasNodeDataWithDialogue
     const choices = sourceNodeData["x-dialogue"]?.frame?.choices ?? []
@@ -809,7 +815,9 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
     if (!pending && edgeData.fromNode) {
       const fromNode = canvas.nodes.get(edgeData.fromNode)
       const fromData = fromNode?.getData() as CanvasNodeDataWithDialogue | undefined
-      if (fromData?.["x-dialogue"]?.router && fromNode) {
+      // LLM agent change (#2 fix): bail on readonly — applyOutgoingRoute/saveRoute also guard, but
+      // skip the pushHistory/trigger/render too so nothing runs on a locked canvas.
+      if (fromData?.["x-dialogue"]?.router && fromNode && !canvas.readonly) {
         const targetRoute = this.resolveOutgoingRoute(canvas, edgeData.fromNode)
         this.applyOutgoingRoute(canvas, edge, targetRoute)
         canvas.pushHistory(canvas.getData())
@@ -898,6 +906,12 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
       return
     }
 
+    // LLM agent change (#2 fix): don't split edges on a readonly canvas. The split mutates the
+    // canvas (removeEdge + importData + pushHistory), which a locked canvas must not allow.
+    if (canvas.readonly) {
+      return
+    }
+
     const edgeData = clickedEdge.getData() as CanvasEdgeDataWithDialogue
     const route = this.getRoute(edgeData["x-dialogue"]?.route)
     if (!route || !edgeData.fromNode || !edgeData.toNode) {
@@ -941,8 +955,15 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
     // which intermittently broke canvas rendering on long edges (problem #3). Now router node + both
     // edges are built as data and applied in ONE importData call — the canvas transitions atomically
     // from one stable state to another.
-    const routerId = `split-router-${Date.now()}`
-    const stamp = Date.now()
+    //
+    // LLM agent change (#1 fix): use crypto.randomUUID() for all three ids. The old Date.now()-
+    // based ids (split-router-${Date.now()}, split-${stamp}-1/-2) could COLLIDE on two splits within
+    // the same millisecond — two routers would share an id and silently shadow each other. Also,
+    // routerId and stamp were two separate Date.now() calls that could diverge by 1ms. UUIDs remove
+    // any collision risk and keep ids globally unique with the rest of the canvas.
+    const routerId = crypto.randomUUID()
+    const edge1Id = crypto.randomUUID()
+    const edge2Id = crypto.randomUUID()
 
     // LLM agent change: helper to build each split half's data. Both halves carry the SAME route as
     // the original edge; color is only set for choice routes (unbound is rendered via CSS var).
@@ -976,9 +997,9 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
       ],
       edges: [
         // edge-1: source → router
-        buildSplitEdge(`split-${stamp}-1`, sourceNodeId, routerId),
+        buildSplitEdge(edge1Id, sourceNodeId, routerId),
         // edge-2: router → target
-        buildSplitEdge(`split-${stamp}-2`, routerId, targetNodeId),
+        buildSplitEdge(edge2Id, routerId, targetNodeId),
       ],
     }
 
@@ -1141,6 +1162,12 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
   // get a single history entry for a whole cascade, not one per edge). Returns true if the edge
   // actually changed (so the caller knows whether to continue the cascade downstream).
   private applyOutgoingRoute(canvas: Canvas, edge: CanvasEdge, route: DialogueRouteData): boolean {
+    // LLM agent change (#2 fix): the reactive cascade (edge-changed → recomputeAllRouters) reaches
+    // here even on a readonly canvas (edge-changed fires during view/selection). Bail before any
+    // setData, otherwise a readonly canvas gets mutated and requestSave'd.
+    if (canvas.readonly) {
+      return false
+    }
     const edgeData = edge.getData() as CanvasEdgeDataWithDialogue
     const existing = this.getRoute(edgeData["x-dialogue"]?.route)
 
