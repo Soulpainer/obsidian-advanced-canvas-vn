@@ -104,6 +104,8 @@ The reactive router-transit recoloring used to be O(N·E) on **every** edge even
 
 **Kept:** rAF-coalescing (one pass per frame, regardless of how many events fired) — `edge-changed` is ambiguous (fires on geometry-only renders too, not just data changes), so coalescing to the next frame when state is settled is correct. `routesEqual` still makes the no-op case cheap. A full-sweep escape hatch (`scheduleRecomputeAllRouters`) is retained but off the hot paths.
 
+> ⚠️ **POTENTIAL PERF REGRESSION SITE (commits `bf4f8b9`, `7228473`).** Not verified by measurement — the change was preventive. The trade-off: the targeted path does more work per **event** (`getData()`, Set allocation, `lastEdgeEndpoints` Map get/set) than the old early-return, but far less work per **rAF pass**. During a pan/drag over a large graph, `edge-changed` fires once per edge per render frame, so the higher per-event constant factor runs hundreds of times per frame — theoretically could cost a few ms on huge graphs, though the cheaper recompute pass should more than offset it. **If lag appears (especially during pan over a dense canvas), look here first:** revert `7228473` (targeted recompute → full sweep) and/or `bf4f8b9` (adjacency index → restore edge scans). Add `performance.now()` instrumentation around `runRecompute` and the per-event work in `onEdgeRouteAffected` to get real numbers before reverting.
+
 ---
 
 ## SOLVED PROBLEMS (all user-confirmed, merged to `main`)
