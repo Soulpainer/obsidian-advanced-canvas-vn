@@ -8,7 +8,7 @@ Branches:
 - `main` — upstream Advanced Canvas.
 - `new-logic` — VN fork base.
 - `vn/dialogue-fixes` — stable: TS fixes, rebrand, upstream cleanup, choice-anchor geometry, CPU fixes, drag-to-spawn, choice-port drag (delegates to native onConnectionPointerdown), occupied-port lock, spawn-cancel cleanup, sequential modal opening (choice → frame).
-- `vn/edge-split-router` (CURRENT) — edge-split feature (double-click route edge → insert router node), color propagation, selection fixes. **WIP: problem #1 (post-split Delete) SOLVED, #2 (router-edge color) fix applied (color-overwrite bug fixed; full inheritance may still need runtime check), #3 (render-break on long edges) unsolved.**
+- `vn/edge-split-router` (CURRENT) — edge-split feature (double-click route edge → insert router node), color propagation, selection fixes. **#1 (post-split Delete) SOLVED, #2 (router as color transit — unbound routes) SOLVED (pending runtime verify), #3 (render-break on long edges) unsolved.**
 
 ## How to deploy & test
 
@@ -57,21 +57,28 @@ The rAF `selectOnly` + `wrapperEl.focus()` DID put focus on the wrapper momentar
 
 **Lesson:** when a canvas keyboard action fails after a mutation, check `activeDocument.activeElement` FIRST — selection state is usually fine. See lesson 15.
 
-### 2. Edges dragged from router are grey / can't be split — HIGH
+### 2. Edges dragged from router are grey / can't be split — SOLVED ✅ ( redesigned as "router as color transit" )
 
-When dragging a new edge FROM a router node (via its native connection point), the edge is **grey** (no route), and double-click doesn't split it.
+Original symptom: dragging a new edge FROM a router left it grey (no route), unsplittable. The original one-shot inheritance (`findInheritedRoute` → `saveRoute` in `onEdgeCreatedFromChoicePort`) was flaky and didn't cover 0/multiple-incoming cases.
 
-`onEdgeCreatedFromChoicePort` should inherit the route from an incoming edge via `findInheritedRoute` → `saveRoute`. But it's **not working**. Possible reasons:
-- `onEdgeCreatedFromChoicePort` may not fire for edges created from a router's connection point (only fires for choice-port drags that set `pendingChoiceRoute`).
-- The `edge-created` event from the patcher may not carry enough info to distinguish "dragged from router" vs "dragged from frame".
-- `findInheritedRoute` may not find the incoming edge (timing — the incoming edge may not be in `canvas.edges` yet when the new edge is created).
+**Redesign:** a router is now a *color transit*. Every edge leaving a router is a route edge (never default/grey). The route KIND depends on the router's incoming route edges:
+- New route type `"unbound"` (`x-dialogue.route = {type:"unbound"}`) — a valid route line NOT bound to a choice. Renders as a themed neutral color (`--dialogue-route-unbound-color`, grey-ish, visible on light+dark).
+- **Outgoing color rule** (counting only route edges — choice + unbound — into the router; default grey edges ignored):
+  - exactly 1 incoming **choice** → inherit it (choiceId/outcome/choiceIndex → that choice's color)
+  - exactly 1 incoming **unbound**, OR 0, OR 2+, OR mixed → **unbound** (white)
+- **Reactive + cascading:** `edge-created` / `edge-removed` / `edge-changed` → `onEdgeRouteAffected` finds router nodes whose incoming/outgoing set changed (the edge's `toNode` and `fromNode`), calls `recomputeRouterOutgoing`, which resolves the outgoing route and cascades downstream (router→router→...), guarded by a `visited` Set against cycles. `applyOutgoingRoute` only calls `setData` when the route actually differs (`routesEqual`) → no infinite loop.
+- **Split supports unbound:** double-clicking a white line splits it into two white lines.
 
-**Bug found & fixed (color-overwrite in `saveRoute`):** even when inheritance *does* reach `saveRoute`, the router source has no `frame.choices`, so `choices.findIndex(...) === -1` and `Math.max(-1, 0) = 0` **overwrote the inherited `route.choiceIndex` to 0** (blue). Fix in `saveRoute`: if the lookup fails AND `route.choiceIndex` is already set (by a prior `saveRoute` / split), preserve it. This fixes the *color*; it does NOT fix "grey" (which means route never got written — that's the runtime-diagnosis path below).
+**Key functions** (all in `dialogue-choice-route-canvas-extension.ts`):
+- `getRoute(route)` — any route (choice OR unbound); used everywhere we ask "is this a route edge". Replaces the old `getChoiceRoute`-as-presence-check at render sites.
+- `resolveOutgoingRoute(canvas, routerId)` — the color rule above.
+- `applyOutgoingRoute(canvas, edge, route)` — sets an edge's route; returns whether it changed.
+- `recomputeRouterOutgoing(canvas, routerNode, visited)` — resolve + apply + cascade.
 
-**Next steps to try (if still grey after the color fix):**
-- Add a temporary `console.log` in `onEdgeCreatedFromChoicePort` to confirm it fires when dragging from a router.
-- Check if `edge-created` event fires at all for router-originated drags (vs only for choice-port drags). Note from patcher: `addEdge` triggers `edge-created` BEFORE `next.call` adds it to `canvas.edges`, and `createTextNode`'s `node-added`/`node-changed` fire async via `runAfterInitialized` — so the `node.initialized && !node.isDirty` guard on `setData` can suppress `node-changed` until init completes. Timing-sensitive.
-- If the event doesn't fire: hook into `node-changed` or `edge-changed` instead, or add a `pointerdown` listener on router nodes (like choice ports) that delegates to `onConnectionPointerdown` and sets a `pendingRouterInherit` flag.
+**What's left / to verify in runtime:**
+- Cascade timing on fast edge edits (the `edge-changed` re-entrancy) — `routesEqual` guards against loops but worth watching.
+- Behavior when a router has a mix of incoming choice + incoming default — by design defaults are ignored, so a router with 1 choice + 1 default inherits the choice color. Confirm that's desired.
+- The earlier `saveRoute` choiceIndex-preservation fix (lesson 13) is now subsumed by `applyOutgoingRoute`, which preserves `choiceIndex` the same way.
 
 ### 3. Edge-split sometimes breaks canvas rendering — MEDIUM
 
@@ -124,3 +131,7 @@ Panning the canvas with the middle mouse button while the cursor is over an edge
 14. **`createTextNode` initialization is async relative to `setData`.** The patcher's `runAfterInitialized` defers `node-added`/`node-changed` until the native node `initialize()` runs, and the `setData` patch guards the `node-changed` trigger behind `node.initialized && !node.isDirty`. So `selectOnly` / render calls immediately after `createTextNode` + `setData` may run against a not-yet-initialized node. Defer with `requestAnimationFrame` if you need the fully-initialized node.
 
 15. **Canvas keyboard actions (Delete/Backspace) depend on `activeDocument.activeElement`, not on `canvas.selection`.** A node can be correctly selected (`selection.has === true`, `getSelectionData().nodes.length === 1`, identity intact) yet Delete still does nothing — because `onKeydown`/`deleteSelection` only fires when the canvas wrapper holds focus. After mutations that render asynchronously (`importData` of edges, iframe content), focus gets stolen to `.embed-iframe.is-controlled`; a single `wrapperEl.focus()` is also stolen moments later. **When a canvas keyboard action fails after a mutation, check `activeDocument.activeElement` FIRST** (vs `canvas.wrapperEl`) — don't waste cycles on selection/identity/getSelectionData. Re-assert `wrapperEl.focus()` at several delays (rAF + 50/150/400ms) to win the race; the delays are cheap and a missed re-assert brings the whole bug back. Do NOT fake clicks via `dispatchEvent` — untrusted events don't move focus and mask the symptom.
+
+16. **A reactive cascade that calls `setData` must guard against re-entrancy loops.** `setData` fires `edge-changed`, which our cascade listens to → would re-run the cascade → `setData` again → infinite loop. Guard with structural equality (`routesEqual`) so `applyOutgoingRoute` skips when the value didn't change: the second pass finds nothing to write and the chain terminates. Use a `visited` Set keyed by node id to protect against cycles in the node graph itself (router A → router B → router A).
+
+17. **"Unbound" is a first-class route kind, not a degenerate choice.** Routes that aren't tied to a specific choice (e.g. a router's outgoing line when the incoming color is ambiguous) still need to be real route edges — colored, splittable, participating in routing — just with a neutral color. Modeled as `type: "unbound"` rather than a choice with a sentinel choiceId, so the type system keeps choice-only code (`getChoiceRoute`, the binding modal) honest and the render path can branch cleanly.
