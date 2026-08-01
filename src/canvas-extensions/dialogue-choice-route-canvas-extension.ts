@@ -1171,12 +1171,15 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
     const edgeData = edge.getData() as CanvasEdgeDataWithDialogue
     const existing = this.getRoute(edgeData["x-dialogue"]?.route)
 
-    // Skip if already correct — prevents infinite cascade loops (setData → edge-changed → recompute).
-    if (existing && this.routesEqual(existing, route)) {
-      return false
-    }
-
-    // Resolve the choiceIndex for color, mirroring saveRoute's logic.
+    // LLM agent change (#5/#7 fix): normalize the route BEFORE persisting. Two problems this solves:
+    //  #5 (stale choiceId) — if the route's choice can't be resolved against the source frame's
+    //    choices (frame deleted, choice removed, or a choice route inherited through a router whose
+    //    fromNode isn't the original frame), the persisted data carried a choiceId pointing at a
+    //    non-existent choice. Now we degrade to unbound IN THE DATA, not just in the render color.
+    //  #7 (missing choiceIndex) — choiceIndex was computed locally for the color but never written
+    //    into the route object, so the persisted route lacked it and would desync on choice reordering.
+    //    Now we persist the resolved choiceIndex on the route object itself.
+    let normalizedRoute: DialogueRouteData = route
     let choiceIndex = -1 // -1 = unbound (neutral color)
     let isFailure = false
     if (route.type === "choice") {
@@ -1188,15 +1191,26 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
         choiceIndex = route.choiceIndex
       }
       if (choiceIndex < 0) {
-        choiceIndex = -1 // unresolved choice → render as unbound (visible, not blue)
+        // Unresolved choice → degrade to unbound in the DATA too, not just render color. Prevents a
+        // stale choiceId from persisting on the edge.
+        normalizedRoute = { type: "unbound" }
+        choiceIndex = -1
       } else {
+        // Persist the resolved choiceIndex so color survives choice reordering downstream.
+        normalizedRoute = { ...route, choiceIndex }
         isFailure = route.outcome === "failure"
       }
     }
 
+    // Skip if already correct — prevents infinite cascade loops (setData → edge-changed → recompute).
+    // Uses the NORMALIZED route, so an edge already storing the degraded unbound won't re-write.
+    if (existing && this.routesEqual(existing, normalizedRoute)) {
+      return false
+    }
+
     const nextXDialogue: DialogueEdgeData = {
       ...edgeData["x-dialogue"],
-      route,
+      route: normalizedRoute,
     }
     delete nextXDialogue.answer
 
