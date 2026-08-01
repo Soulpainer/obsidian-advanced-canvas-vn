@@ -639,10 +639,11 @@ export default class DialogueRouterCanvasExtension extends CanvasExtension {
     return { color: "var(--background-primary)", state: "white" }
   }
 
-  // LLM agent change: compute the RESOLVED rgb CSS color of a route edge for node-coloring. Resolves
-  // the var() expression to rgb via the DOM probe so that visually-equal colors (unknown & unbound,
-  // both grey) compare equal — a raw string comparison would treat them as different and misclassify
-  // the node. Returns null for non-route edges.
+  // LLM agent change: compute the RESOLVED rgb CSS color of a route edge, BUT ONLY for VALID choice
+  // routes — returns null for unbound/broken/unknown. This is the crux of node coloring: "valid"
+  // means a resolvable choice (a concrete palette color). unbound/broken/unknown are PROBLEM states,
+  // not a valid input/output. So a router with in=[choice] out=[unbound] has ONE valid input and
+  // ZERO valid outputs → grey warning (not white), matching the user's intent.
   private edgeRouteColor(
     canvas: Canvas,
     _edge: CanvasEdge,
@@ -651,11 +652,20 @@ export default class DialogueRouterCanvasExtension extends CanvasExtension {
   ): string | null {
     const route = data["x-dialogue"]?.route
     if (!route) {
-      return null
+      return null // default edge — not a route
+    }
+    // Only a resolvable choice counts as a valid colored endpoint.
+    if (route.type !== "choice") {
+      return null // unbound / broken / unknown — problem state, not a valid endpoint
     }
     const sourceNode = data.fromNode ? canvas.nodes.get(data.fromNode) : undefined
     const sourceData = sourceNode?.getData() as CanvasNodeDataWithDialogue | undefined
     const sourceChoices = sourceData?.["x-dialogue"]?.frame?.choices ?? []
+    // Verify the choice actually resolves against the source frame's choices (a deleted choice
+    // persisted as broken upstream is caught here too).
+    if (sourceChoices.length > 0 && !sourceChoices.some(c => c.choiceId === route.choiceId)) {
+      return null // choice doesn't resolve → not valid
+    }
     const cssVar = routeToColorCss(route, sourceChoices)
     // Resolve to concrete rgb so visually-equal colors compare equal (see method comment).
     return resolveCssColor(cssVar)
