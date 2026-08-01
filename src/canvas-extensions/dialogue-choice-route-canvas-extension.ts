@@ -1242,14 +1242,12 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
   // LLM agent change: pick which SIDE of a router node a given edge should attach to, based on the
   // geometry of the OTHER endpoint. Only router nodes get dynamic sides — frame/target sides stay as
   // stored in the edge data. Computed per render-pass and cached (routerSideCache) so every edge of
-  // one router agrees on the assignment within a pass (needed by the "1 input → opposite of output"
-  // rule). Returns the cached side for the requested edge+role, or falls back to the stored side.
+  // one router agrees on the assignment within a pass. Returns the cached side for the requested
+  // edge+role, or falls back to the stored side.
   //
-  // Rules (see plan):
-  //   - outgoing (this router is fromNode): side = nearest face to the target node's center.
-  //   - incoming (this router is toNode):
-  //       exactly 1 incoming → opposite of the (single) outgoing side (or nearest-to-source if no out)
-  //       several incoming  → each nearest to its own source (like outgoing)
+  // Rules (see computeRouterEdgeSides):
+  //   - 1 in + 1 out: output = nearest face to target; input = OPPOSITE face (straight pass-through).
+  //   - otherwise: every edge (in or out) independently takes the face nearest its own neighbor.
   private resolveRouterEdgeSide(
     canvas: Canvas,
     routerNode: CanvasNode,
@@ -1307,26 +1305,18 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
 
     const result = new Map<string, { fromSide: Side; toSide: Side }>()
 
-    // LLM agent change: special case — exactly 1 incoming + 1 outgoing. Each edge attaches to the
-    // face nearest its OWN neighbor (source for the input, target for the output). This gives a
-    // natural straight line when the two neighbors sit on opposite faces of the router, and a smooth
-    // 90° bend when they are perpendicular. The previous attempt forced both edges onto a single
-    // shared axis, but that sent an edge to the WRONG face whenever the two neighbors were on
-    // different axes (e.g. source upper-left, target below) — producing the coils seen on roughly
-    // straight vertical/horizontal layouts.
-    //
-    // The one case "nearest face for each" gets wrong is a U-turn layout, where both neighbors lie
-    // on the SAME face: both edges would pile onto that face and overlap. Resolve that by pushing
-    // the OUTPUT onto the opposite face, so the line makes a clean pass-through (in on the near
-    // face, out on the far face) instead of doubling back over itself.
+    // LLM agent change: special case — exactly 1 incoming + 1 outgoing. Rule: the OUTPUT side is
+    // the face nearest the target, and the INPUT side is the OPPOSITE face — so the line passes
+    // straight THROUGH the router (in on one face, out on the opposite). This avoids the coils seen
+    // with "nearest per edge" when source and target ended up on the same face, and avoids the
+    // wrong-face problem of forcing a single shared axis. When the neighbors are roughly opposite,
+    // the line is dead straight; when they're at an angle, the input comes in on the face opposite
+    // the output and the source's connecting line bends to meet it (an acceptable, predictable bend).
     if (incoming.length === 1 && outgoing.length === 1) {
       const inc = incoming[0]!
       const out = outgoing[0]!
-      const inSide: Side = inc.otherNode ? this.nearestSide(routerCenter, this.nodeCenter(inc.otherNode)) : "left"
-      let outSide: Side = out.otherNode ? this.nearestSide(routerCenter, this.nodeCenter(out.otherNode)) : "right"
-      if (outSide === inSide) {
-        outSide = inSide === "left" ? "right" : inSide === "right" ? "left" : inSide === "top" ? "bottom" : "top"
-      }
+      const outSide: Side = out.otherNode ? this.nearestSide(routerCenter, this.nodeCenter(out.otherNode)) : "right"
+      const inSide: Side = outSide === "left" ? "right" : outSide === "right" ? "left" : outSide === "top" ? "bottom" : "top"
       // incoming edge: the router is the toNode, so its side is inSide. (fromSide is the source
       // frame's own side, read from edge data at render time; the stub here is unused for it.)
       result.set(inc.edgeId, { fromSide: "right", toSide: inSide })
