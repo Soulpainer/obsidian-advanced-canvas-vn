@@ -1,286 +1,117 @@
-# Agent Handoff
+# VN Canvas — Agent Handoff (current state: branch `vn/edge-split-router`)
 
-> LLM agent change: this handoff document was prepared by Codex, an LLM agent, on 2026-07-26 for the next development agent.
+## What this plugin is
 
-## Зачем этот документ
+A fork of obsidian-advanced-canvas, stripped to a **visual-novel dialogue graph editor**. Plugin id `vn-canvas`, deployed to `<vault>/.obsidian/plugins/vn-canvas/` via `npm run deploy`. Canvas nodes = dialogue frames, edges = routes. Data in `.canvas` files + `Dialogue/*.md` tables (Characters/Stats/Properties/Triggers), read by a Unity runtime.
 
-Это форк `obsidian-advanced-canvas-vn`, который сейчас превращается в авторский редактор dialogue graph для визуальной новеллы/Unity-runtime. Основная работа велась вокруг Obsidian Canvas: фреймы диалога, choices, checks/conditions, actions, route points и экспортируемый JSON-формат через `x-dialogue`.
+Branches:
+- `main` — upstream Advanced Canvas.
+- `new-logic` — VN fork base.
+- `vn/dialogue-fixes` — stable: TS fixes, rebrand, upstream cleanup, choice-anchor geometry, CPU fixes, drag-to-spawn, choice-port drag (delegates to native onConnectionPointerdown), occupied-port lock, spawn-cancel cleanup, sequential modal opening (choice → frame).
+- `vn/edge-split-router` (CURRENT) — edge-split feature (double-click route edge → insert router node), color propagation, selection fixes. **Unstable / WIP.**
 
-Важное правило из [AGENTS.md](../AGENTS.md): любые изменения LLM-агента должны быть явно помечены. В существующем коде это чаще всего сделано комментариями `LLM agent change: ...`. Для новых коммитов безопасный вариант: добавить префикс вроде `[LLM agent]` в commit message и/или оставлять точечные комментарии рядом с нетривиальными LLM-правками.
+## How to deploy & test
 
-## Текущее состояние репозитория
-
-На момент подготовки этого handoff:
-
-- `git status --short` был чистым.
-- Обычный `git status` в sandbox падает из-за dubious ownership. Используй:
-
-```powershell
-git -c safe.directory=C:/Users/BARD/Projects/obsidian-advanced-canvas-vn status --short
+```bash
+npm run deploy          # build + copy to vault
+# then toggle plugin OFF/ON in Obsidian (Settings → Community plugins)
+# Console: Ctrl+Shift+I
 ```
 
-- Последние коммиты по смыслу: `unity instuctions`, `collapse/expand`, `actions`, `route joints`, `choises`, `dialog`, `character badge`, `conditions`, `checks`, `dialogue data`.
+## Architecture (key files)
 
-## Главная архитектура
+- `src/canvas-extensions/dialogue-choice-route-canvas-extension.ts` — route rendering, choice-port drag, edge-split, color, anchor geometry. **The file with the most active work.**
+- `src/canvas-extensions/dialogue-frame-canvas-extension.ts` — frame rendering, choice ports (DOM), frame editor modal, spawn-cancel cleanup.
+- `src/canvas-extensions/dialogue-router-canvas-extension.ts` — router nodes, context menu, spawn menu (drag-to-spawn on empty), interaction-layer data attributes (resize-disable).
+- `src/patchers/canvas-patcher.ts` — monkey-patches Obsidian Canvas, emits `advanced-canvas:*` events. `edge.render` patched → `edge-rendered:after`.
+- `src/styles.scss` — choice port CSS, router CSS, resize-disable, connection-point reposition.
 
-Точка входа: [src/main.ts](../src/main.ts).
+## Key concepts
 
-Сейчас в `CANVAS_EXTENSIONS` подключены только тихая canvas-инфраструктура и dialogue UI:
+- **Route edge**: an edge with `x-dialogue.route = {type:"choice", choiceId, outcome, choiceIndex}` in its DATA. Only route edges are colored, splittable, and participate in dialogue routing. **Route must be in edge data, NOT applied as a visual hack at render time** (that was tried and failed — edges looked colored but couldn't be split).
+- **Choice port drag**: pointerdown on `.dialogue-canvas-choice-swatch` / `.dialogue-canvas-choice-failure-port` → delegates to `sourceNode.onConnectionPointerdown(event, "right")` for a native floating-end drag. `pendingChoiceRoute` remembers the choice; `onEdgeCreatedFromChoicePort` binds it via `saveRoute`.
+- **Edge-split**: double-click a route edge → insert router node at click point, split edge into two route edges (source→router, router→target), both carrying the route binding.
+- **Color propagation**: edges dragged FROM a router should inherit the route from an incoming route edge. Implemented in `onEdgeCreatedFromChoicePort` via `findInheritedRoute` → `saveRoute`.
 
-- `MetadataCanvasExtension`
-- dataset exposers: canvas metadata, wrapper, node, edge, node interaction
-- `DialogueFrameCanvasExtension`
-- `DialogueRouterCanvasExtension`
-- `DialogueChoiceRouteCanvasExtension`
+---
 
-Важно: [src/canvas-extensions/dialogue-answer-canvas-extension.ts](../src/canvas-extensions/dialogue-answer-canvas-extension.ts) и [src/canvas-extensions/dialogue-test-canvas-extension.ts](../src/canvas-extensions/dialogue-test-canvas-extension.ts) существуют, но сейчас не зарегистрированы в [src/main.ts](../src/main.ts). `DialogueAnswerCanvasExtension` выглядит как более старый edge-answer подход и частично конфликтует с новым решением, где choices живут на frame node.
+## UNSOLVED PROBLEMS (on branch `vn/edge-split-router`)
 
-Основные типы: [src/@types/DialogueCanvas.ts](../src/@types/DialogueCanvas.ts).
+### 1. Router-node selection doesn't work (Delete broken) — HIGH
 
-Формат для Unity/runtime описан отдельно: [docs/unity-dialogue-data-format.md](unity-dialogue-data-format.md).
+After edge-split creates a router node, `canvas.selectOnly(routerNode)` is called, but the node is **not properly selected** — Delete/Backspace doesn't remove it. The node looks highlighted but isn't in `canvas.selection` in a way Obsidian's delete handler accepts.
 
-## Модель данных
+**What was tried:**
+- `selectOnly` synchronously after `importData` — no effect.
+- `selectOnly` via `setTimeout(0)` — no effect.
+- `selectOnly` via `requestAnimationFrame` — no effect.
+- `createTextNode` instead of `importData` for the router node — the current approach, still broken.
+- `updateSelection(() => { deselectAll; selection.add(node) })` — **broke the entire canvas rendering** (reverted).
 
-Dialogue-данные живут в кастомном поле `x-dialogue`.
+**Key observation:** `createRouterNode` in `dialogue-router-canvas-extension.ts` (line ~350) does `canvas.selectOnly(node)` after `createTextNode` + `setData`, and it works there. The difference: in edge-split, we also call `removeEdge` + `importData` for the two new edges between `createTextNode` and `selectOnly`. One of those operations likely clears/invalidates selection.
 
-У canvas metadata используются:
+**Next steps to try:**
+- Reorder: `selectOnly` BEFORE `removeEdge`/`importData`.
+- Or: don't use `selectOnly` at all; instead simulate a click on the node element (`node.nodeEl.dispatchEvent(new MouseEvent(...))`).
+- Or: check if `createTextNode` returns a node whose `nodeEl` is already in the DOM and selectable — maybe the issue is the node isn't fully rendered when selectOnly is called.
+- Compare with `spawnNodeAtDrop` in router-ext which also creates a node + edges and may or may not select — does Delete work there?
 
-- `metadata.startNode`
-- `metadata.endNode`
+### 2. Edges dragged from router are grey / can't be split — HIGH
 
-У node:
+When dragging a new edge FROM a router node (via its native connection point), the edge is **grey** (no route), and double-click doesn't split it.
 
-- `node["x-dialogue"].frame` - диалоговый фрейм.
-- `node["x-dialogue"].router` - прозрачная route point нода.
+`onEdgeCreatedFromChoicePort` should inherit the route from an incoming edge via `findInheritedRoute` → `saveRoute`. But it's **not working**. Possible reasons:
+- `onEdgeCreatedFromChoicePort` may not fire for edges created from a router's connection point (only fires for choice-port drags that set `pendingChoiceRoute`).
+- The `edge-created` event from the patcher may not carry enough info to distinguish "dragged from router" vs "dragged from frame".
+- `findInheritedRoute` may not find the incoming edge (timing — the incoming edge may not be in `canvas.edges` yet when the new edge is created).
 
-У frame сейчас есть:
+**Next steps to try:**
+- Add a temporary `console.log` in `onEdgeCreatedFromChoicePort` to confirm it fires when dragging from a router.
+- Check if `edge-created` event fires at all for router-originated drags (vs only for choice-port drags).
+- If the event doesn't fire: hook into `node-changed` or `edge-changed` instead, or add a `pointerdown` listener on router nodes (like choice ports) that delegates to `onConnectionPointerdown` and sets a `pendingRouterInherit` flag.
 
-- `frameId`
-- `speakerId`
-- `choices`
-- `actions`
+### 3. Edge-split sometimes breaks canvas rendering — MEDIUM
 
-Текст реплики хранится только в `node.text`. Старое поле вида `x-dialogue.frame.text` больше не считается источником истины.
+Splitting a **long** edge sometimes corrupts the canvas display (nodes/edges disappear or glitch) until the canvas is reloaded. The single-`importData` rewrite helped but didn't fully fix it.
 
-У edge:
+**Root cause hypothesis:** `removeEdge(clickedEdge)` then `importData` happens while `edge-rendered:after` / `renderRouteEdge` may fire synchronously on the new edges, referencing nodes/edges in a partially-applied state.
 
-- `edge["x-dialogue"].route.type === "choice"` - основной новый маршрут choice.
-- route содержит `choiceId` и `outcome: "success" | "failure"`.
-- Старые `edge["x-dialogue"].answer` и `route.type === "failure"` ещё есть в типах/старом extension, но новый активный путь должен опираться на frame choices + choice routes.
+**Next steps to try:**
+- Defer the entire split operation (removeEdge + importData + selectOnly) into a single `requestAnimationFrame` or `setTimeout(0)` block, so it runs after Obsidian finishes processing the double-click event.
+- Or: use `canvas.setData()` (full canvas data replacement) instead of removeEdge + importData — build the complete node+edge list, set it atomically.
 
-## Что уже сделано
+### 4. Choice-port drag from OCCUPIED ports — LOW (mostly fixed)
 
-[src/canvas-extensions/dialogue-router-canvas-extension.ts](../src/canvas-extensions/dialogue-router-canvas-extension.ts):
+Occupied ports (with route) are dimmed via CSS (`pointer-events: none`) and the capture handler bails. This mostly works. Edge case: if CSS doesn't load or the class isn't applied, the JS guard is the fallback.
 
-- Добавляет пункты context menu: `Add dialogue frame` и `Add dialogue route point`.
-- Создаёт dialogue frame как text-node `360x220` с `x-dialogue.frame`.
-- Создаёт route point как маленькую `28x28` transparent helper node с `x-dialogue.router.type = "point"`.
-- Для route point разрешает только один outgoing edge, лишние удаляются.
-- Настраивает CSS/interaction так, чтобы selected route point был drag-only, а unselected route point сохранял edge handles.
+### 5. Lag: route edges during pan-over-edge — LOW (deferred)
 
-[src/canvas-extensions/dialogue-frame-canvas-extension.ts](../src/canvas-extensions/dialogue-frame-canvas-extension.ts):
+Panning the canvas with the middle mouse button while the cursor is over an edge causes route edges to lag/drift. This was a pre-existing issue. The geometry-only anchor fix (`getChoiceAnchorGeometric`) and synchronous `edge-rendered:after` rendering helped with drag/resize collapse, but the pan-over-edge lag persists. Our render code is NOT called during pan (logs confirmed), so the lag is likely from Obsidian's native edge re-rendering overwriting our path. May need a viewport-change listener that re-renders routes after pan settles.
 
-- Открывает modal editor при double-click/native edit request вместо inline canvas editing.
-- Умеет ставить/unset `startNode` и `endNode`.
-- Рендерит character header: portrait, initials или fallback mark.
-- Рендерит текст frame через отдельный overlay, а native markdown content скрывает.
-- Рендерит choices внутри node как passive rows.
-- Показывает stat badges для checks/conditions.
-- Показывает `ACT n` indicator, если у frame есть actions.
-- Поддерживает min-size для frame, чтобы choices/header не ломали карточку.
+---
 
-[src/modals/edit-dialogue-frame-modal.ts](../src/modals/edit-dialogue-frame-modal.ts):
+## IMPORTANT LESSONS LEARNED (don't repeat these mistakes)
 
-- Редактирует `frameId`, `speakerId`, `text`.
-- Редактирует choices внутри frame.
-- У choices есть text, `hideWhenUnavailable`, checks и conditions.
-- При сохранении choices перенумеровываются в `1..N`. Это важно: route binding завязан на `choiceId`, поэтому reorder/remove может инвалидировать старые edge routes.
-- Редактирует frame actions: trigger, global property, character stat, character inventory.
-- Для action values поддержаны fixed value и random range.
-- Есть collapse/expand для choices/actions.
+1. **Route must be in edge DATA, not visual.** Coloring an edge in `renderRouteEdge` without writing `x-dialogue.route` into the edge data makes it look right but breaks splitting and routing. Always use `saveRoute` to write route data.
 
-[src/canvas-extensions/dialogue-choice-route-canvas-extension.ts](../src/canvas-extensions/dialogue-choice-route-canvas-extension.ts):
+2. **`menu.hide()` on `canvas:node-connection-drop-menu` doesn't work.** That event lets you ADD items to a not-yet-shown menu. To suppress spawn items, use a dataset flag on `canvas.wrapperEl` that the router's drop-menu handler checks.
 
-- В popup menu edge добавляет `Bind Choice Route`.
-- В popup menu frame node добавляет `Add Linked Choice Frame`, если у frame есть choices.
-- Привязывает edge к `choiceId + outcome`.
-- Success/failure routes получают разные anchors/colors; failure edge визуально dashed.
-- Перерисовывает route path после native edge render, node move/resize, dialogue frame render и pointer drag.
-- Прячет native edge label для choice-bound edges.
+3. **`event.preventDefault()` before `onConnectionPointerdown` kills the drag.** Obsidian checks `event.defaultPrevented`. Only use `stopPropagation`.
 
-[src/patchers/canvas-patcher.ts](../src/patchers/canvas-patcher.ts):
+4. **Stale canvas after menu click.** The `canvas` object captured when a menu is shown can be stale by the time the user clicks an item. Always use `this.plugin.getCurrentCanvas()` inside menu `onClick` handlers.
 
-- Перехватывает `setIsEditing` для dialogue frame: вместо inline editing триггерит `advanced-canvas:dialogue-frame-edit-requested`.
-- После native edge render триггерит `advanced-canvas:edge-rendered:after`, на это опирается route renderer.
+5. **`choiceId` is 1-based positional, not array index.** choiceId "3" = choices[2]. The geometric anchor formula must match choiceId to row index correctly (subtract 1 or use `findIndex`).
 
-[src/canvas-extensions/advanced-styles/edge-styles.ts](../src/canvas-extensions/advanced-styles/edge-styles.ts):
+6. **Field initializers run AFTER `super()` in the base class.** `CanvasExtension` base constructor calls `this.init()` from `super()`, which runs before TS field initializers. Map/Set fields must be created at the top of `init()`, not inline.
 
-- Пропускает `x-dialogue.route.type === "choice"`, чтобы advanced edge styling не вступал в рекурсию с кастомным renderer.
+7. **`overflow: hidden` on `.canvas-node-container` clips ports at `right: -7px`.** Either set `overflow: visible` for dialogue frames, or keep ports inside the bbox.
 
-[src/canvas-extensions/dataset-exposers/canvas-metadata-exposer.ts](../src/canvas-extensions/dataset-exposers/canvas-metadata-exposer.ts):
+8. **Obsidian resize handles are in `.canvas-node-interaction-layer`** (one per canvas), with `.canvas-node-resizer[data-resize="right|topright|bottomright|..."]`. Disable specific sides via `pointer-events: none` + a data attribute on the interaction layer.
 
-- Кроме `data-is-start-node` теперь выставляет `data-is-end-node`.
+9. **Two MutationObservers were the main CPU hog:** body+subtree (menu) and wrapperEl+subtree+attributes (frame). Narrowed to childList-only on body and wrapperEl respectively.
 
-Support data loaders:
+10. **`renderRouteEdge` must be called synchronously on `edge-rendered:after`**, not via rAF — otherwise native edge.render in the next frame overwrites the path (routes collapse to a point during drag/resize).
 
-- [src/utils/dialogue-characters-loader.ts](../src/utils/dialogue-characters-loader.ts) читает `Dialogue/Characters.md`.
-- [src/utils/dialogue-stats-loader.ts](../src/utils/dialogue-stats-loader.ts) читает `Dialogue/Stats.md`.
-- [src/utils/dialogue-properties-loader.ts](../src/utils/dialogue-properties-loader.ts) читает `Dialogue/Properties.md`.
-- [src/utils/dialogue-triggers-loader.ts](../src/utils/dialogue-triggers-loader.ts) читает `Dialogue/Triggers.md`.
+11. **Choice anchor geometry is calibrated from real DOM measurements:** row height 22px (no failure) / +30px (with failure), success port at row center (half row height), failure port at 38px from row top, list anchored 8px from node bottom, 4px gap between rows. See `getChoiceAnchorGeometric`.
 
-[src/utils/dialogue-choice-selector.ts](../src/utils/dialogue-choice-selector.ts):
-
-- Утилита runtime-выбора choice: фильтрует по checks/conditions.
-- `manual` берёт указанное `choiceId`, `randomAvailable` выбирает случайный available choice.
-
-## Support Markdown files в vault
-
-Редактор ожидает опциональные файлы в vault:
-
-- `Dialogue/Characters.md`
-- `Dialogue/Stats.md`
-- `Dialogue/Properties.md`
-- `Dialogue/Triggers.md`
-
-Каждый loader ищет markdown table с нужными колонками. Детальный формат уже описан в [docs/unity-dialogue-data-format.md](unity-dialogue-data-format.md).
-
-## Где обосрались / риски
-
-1. `npx tsc --noEmit` сейчас падает. Это самый важный технический долг перед продолжением.
-
-Ключевые ошибки:
-
-- [src/canvas-extensions/dialogue-choice-route-canvas-extension.ts](../src/canvas-extensions/dialogue-choice-route-canvas-extension.ts): `getRouteCanvasColorId()` возвращает plain `string`, а `color` ожидает `CanvasColor`.
-- [src/canvas-extensions/dialogue-choice-route-canvas-extension.ts](../src/canvas-extensions/dialogue-choice-route-canvas-extension.ts): `EditDialogueFrameModal` теперь требует `triggers`, но `openFrameModal()` их не загружает и не передаёт.
-- [src/canvas-extensions/dialogue-choice-route-canvas-extension.ts](../src/canvas-extensions/dialogue-choice-route-canvas-extension.ts) и [src/canvas-extensions/dialogue-router-canvas-extension.ts](../src/canvas-extensions/dialogue-router-canvas-extension.ts): `node.setData({ text: ... })` ругается, потому что `CanvasNode.getData()` типизирован как `CanvasNodeData`, а не `CanvasTextNodeData | AnyCanvasNodeData`.
-- [src/canvas-extensions/dialogue-frame-canvas-extension.ts](../src/canvas-extensions/dialogue-frame-canvas-extension.ts) и [src/canvas-extensions/dialogue-choice-route-canvas-extension.ts](../src/canvas-extensions/dialogue-choice-route-canvas-extension.ts): сохраняются `checks`/`conditions` на `DialogueFrameData`, хотя в типе их уже нет. Это похоже на остаток старой модели.
-- [src/canvas-extensions/dialogue-frame-canvas-extension.ts](../src/canvas-extensions/dialogue-frame-canvas-extension.ts): `NodeListOf<Element>` spread и narrowing around `extractColorFromCssValue()` тоже дают TS errors.
-
-2. `npm run build` в текущем sandbox упал до нормальной проверки:
-
-```txt
-Cannot read directory "../..": Access is denied.
-Could not resolve "./src/styles.scss"
-Could not resolve "./src/main.ts"
-```
-
-Это может быть sandbox/path issue с esbuild. После исправления TS всё равно нужно перепроверить build в нормальной среде Obsidian/plugin dev.
-
-3. `npm run lint` сейчас падает массово: 417 errors, 2 warnings. Там смешаны старые ошибки проекта и новые dialogue warnings/errors. Не воспринимай lint как точечный индикатор только dialogue-изменений, но dialogue-файлы тоже надо привести в порядок перед релизом.
-
-4. В коде есть mojibake из-за сломанной кодировки.
-
-Примеры:
-
-- Русские комментарии отображаются как `РњРёРЅ...`.
-- Emoji/string literals отображаются как `рџЋІ`, `рџ”’`, `вќЊ`, `вњЋ`.
-- Это есть и в [src/canvas-extensions/dialogue-answer-canvas-extension.ts](../src/canvas-extensions/dialogue-answer-canvas-extension.ts), и в [src/canvas-extensions/dialogue-frame-canvas-extension.ts](../src/canvas-extensions/dialogue-frame-canvas-extension.ts), и в [docs/unity-dialogue-data-format.md](unity-dialogue-data-format.md).
-
-Не делай массовую замену вслепую. Сначала надо понять, где это только комментарии/доки, а где runtime-visible labels/icons. Особенно опасны `stripLabelPrefixes()` и `buildEdgeLabel()` в legacy answer extension.
-
-5. Choice IDs нестабильны при сохранении.
-
-`EditDialogueFrameModal.getValidChoices()` перенумеровывает choices по порядку. Если у frame уже есть edges с `choiceId`, удаление/перестановка choices может перепривязать маршруты к другому choice. Нужно решить модель: либо choiceId должен быть стабильным semantic id, либо после сохранения надо мигрировать outgoing route edges.
-
-6. Actions не полностью сохранены во всех путях.
-
-Основной `DialogueFrameCanvasExtension.saveDialogueFrame()` сохраняет `actions`, но `DialogueChoiceRouteCanvasExtension.openFrameModal()/saveFrame()` выглядит устаревшим: не передаёт `triggers`, не включает `actions` в `initialValue`, и при save не сохраняет actions. Это надо синхронизировать или удалить дублирующий frame modal path.
-
-7. `DialogueAnswerCanvasExtension` выглядит legacy и не подключён.
-
-Он хранит answer metadata на edges, умеет Edit Answer/Checks/Conditions/Failure Route и строит labels с emoji prefixes. Новая runtime-дока говорит, что choices принадлежат frame nodes, а edges только route. Лучше не включать этот extension без осознанной миграции.
-
-8. Нет автоматических тестов для dialogue parsing/rendering.
-
-Сейчас поведение проверялось в основном через code inspection и команды. Для следующего шага полезны хотя бы unit tests для:
-
-- markdown table loaders;
-- `DialogueChoiceSelector`;
-- choice id/route migration;
-- action value normalization.
-
-## Команды проверки
-
-```powershell
-npx tsc --noEmit
-npm run build
-npm run lint
-```
-
-В sandbox `npm run build` может упасть из-за access/path issue, но `npx tsc --noEmit` уже показывает реальные compile errors.
-
-## Что чинить первым
-
-1. Вернуть зелёный `npx tsc --noEmit`.
-
-Самые быстрые правки:
-
-- Передавать `DialogueTriggersLoader.loadTriggers()` в `DialogueChoiceRouteCanvasExtension.openFrameModal()`.
-- Убрать `checks`/`conditions` из `DialogueFrameData` save paths или явно вернуть их в тип, если они реально нужны.
-- Починить типизацию text node data: импортировать/использовать `CanvasTextNodeData`/`AnyCanvasNodeData` или расширить локальный `CanvasNodeDataWithDialogue` так, чтобы `setData()` принимал `text`.
-- Вернуть `CanvasColor` вместо plain `string` для edge colors.
-- Заменить spread `NodeListOf` на `Array.from(...)`.
-
-2. Выбрать единственную модель choices/routes.
-
-Рекомендация: новая модель должна быть такой:
-
-- choices живут только в `node["x-dialogue"].frame.choices`;
-- edge хранит только route binding: `choiceId + outcome`;
-- legacy `answer` extension оставить выключенным или удалить после миграции;
-- `choiceId` сделать стабильным и не зависящим от порядка в списке.
-
-3. Синхронизировать creation/edit paths.
-
-Сейчас frame можно редактировать через `DialogueFrameCanvasExtension`, но linked frame создаётся и редактируется через `DialogueChoiceRouteCanvasExtension.openFrameModal()`. Лучше переиспользовать один путь/событие, чтобы не расходились `triggers/actions/focus/onClose`.
-
-4. Аккуратно разобрать mojibake.
-
-Сначала восстановить source encoding или заменить только безопасные user-visible strings. Не забыть, что AGENTS требует отмечать LLM-изменения.
-
-5. Проверить UX в Obsidian.
-
-Нужно руками открыть canvas и пройти сценарии:
-
-- add dialogue frame;
-- edit frame by double-click;
-- add choices/checks/conditions/actions;
-- add linked choice frame;
-- bind existing edge to choice success/failure;
-- move/resize source and target nodes;
-- create route point and verify one outgoing edge;
-- save/reopen canvas and verify rendered anchors/labels.
-
-## Где смотреть при продолжении
-
-Для runtime/schema:
-
-- [src/@types/DialogueCanvas.ts](../src/@types/DialogueCanvas.ts)
-- [docs/unity-dialogue-data-format.md](unity-dialogue-data-format.md)
-
-Для frame UI:
-
-- [src/canvas-extensions/dialogue-frame-canvas-extension.ts](../src/canvas-extensions/dialogue-frame-canvas-extension.ts)
-- [src/modals/edit-dialogue-frame-modal.ts](../src/modals/edit-dialogue-frame-modal.ts)
-- [src/styles.scss](../src/styles.scss)
-
-Для route UI:
-
-- [src/canvas-extensions/dialogue-choice-route-canvas-extension.ts](../src/canvas-extensions/dialogue-choice-route-canvas-extension.ts)
-- [src/canvas-extensions/dialogue-router-canvas-extension.ts](../src/canvas-extensions/dialogue-router-canvas-extension.ts)
-- [src/patchers/canvas-patcher.ts](../src/patchers/canvas-patcher.ts)
-
-Для external data:
-
-- [src/utils/dialogue-characters-loader.ts](../src/utils/dialogue-characters-loader.ts)
-- [src/utils/dialogue-stats-loader.ts](../src/utils/dialogue-stats-loader.ts)
-- [src/utils/dialogue-properties-loader.ts](../src/utils/dialogue-properties-loader.ts)
-- [src/utils/dialogue-triggers-loader.ts](../src/utils/dialogue-triggers-loader.ts)
-
-## Ментальная модель для следующего агента
-
-Думай об этом не как о generic canvas plugin, а как о dialogue authoring layer поверх Obsidian Canvas.
-
-Canvas остаётся visual graph editor. `x-dialogue` - authoritative game data. DOM/CSS overlays нужны только для удобного авторинга: headers, choices, ports, colored routes. Unity/runtime должен читать JSON и markdown tables, а не пытаться восстановить смысл из canvas colors/labels/DOM.
-
-Если есть сомнение между красивым canvas UX и стабильностью данных, выбирай стабильность данных.
+12. **`AGENTS.md` requires LLM-agent marking** on all changes — commit prefix `[LLM agent]` and in-code comments.
