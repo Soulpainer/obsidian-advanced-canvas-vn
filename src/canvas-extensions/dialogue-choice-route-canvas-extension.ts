@@ -1334,10 +1334,12 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
     // LLM agent change: if the TARGET is also a router, compute its side dynamically too (the
     // getEdgeTargetAnchor will read this). Otherwise keep the stored side.
     let toSide: Side = edge.to.side
+    let isRouterTarget = false
     if (edgeData.toNode) {
       const targetNode = canvas.nodes.get(edgeData.toNode)
       const targetData = targetNode?.getData() as CanvasNodeDataWithDialogue | undefined
       if (targetNode && targetData?.["x-dialogue"]?.router) {
+        isRouterTarget = true
         toSide = this.resolveRouterEdgeSide(canvas, targetNode, edge, "to", edge.to.side)
       }
     }
@@ -1361,6 +1363,12 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
     }
 
     this.applyEdgeColor(edge, colorCss)
+    // LLM agent change: hide arrowheads on ROUTER endpoints — a router is a transit point, the
+    // direction is conveyed by the line itself, and the native arrowhead is positioned off our
+    // computed anchor anyway (it follows edge.from/edge.to, which we don't move). Hide per render
+    // pass because Obsidian re-shows line-ends on its own re-render.
+    edge.fromLineEnd?.el?.style.setProperty("display", isRouterSource ? "none" : "")
+    edge.toLineEnd?.el?.style.setProperty("display", isRouterTarget ? "none" : "")
     // LLM agent change: do not re-render the native label from our route renderer; it can recursively trigger edge renders.
     this.setEdgeLabelVisible(edge, false)
   }
