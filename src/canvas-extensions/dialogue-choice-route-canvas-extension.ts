@@ -170,6 +170,16 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
   // the many edge-changed events that fire during a drag/move into a single recompute pass that
   // runs against the settled graph state. Created in init() for the same ordering reason as above.
   private recomputeFrames!: WeakMap<Canvas, number>
+  // LLM agent change: the set of router node ids whose outgoing routes need recomputing on the next
+  // rAF pass (targeted path), PLUS a flag for "recompute everything" (node-changed fallback path).
+  // Events accumulate node ids; the rAF pass recomputes only those routers + their downstream
+  // cascade. If fullSweepRequested is true, every router is recomputed instead. Per-canvas.
+  private pendingRecomputeNodes!: WeakMap<Canvas, { nodes: Set<string>; fullSweep: boolean }>
+  // LLM agent change: last-seen fromNode/toNode per edge id, per canvas. Used to detect a RETARGET:
+  // when an edge's endpoint changes between events, the PREVIOUS endpoint (now detached) also needs
+  // recomputing — but by event time getData() already reflects the new endpoint, so the old one is
+  // lost unless we remembered it. Only the delta (previous vs current) feeds the affected set.
+  private lastEdgeEndpoints!: WeakMap<Canvas, Map<string, { fromNode: string | undefined; toNode: string | undefined }>>
   // LLM agent change: per-render-pass cache of computed router-edge sides, so every edge of a given
   // router sees a consistent side assignment within one renderCanvas pass (important for the rule
   // "1 input → opposite the output"). Keyed canvas → (router node → (edgeId → {fromSide,toSide})).
@@ -201,6 +211,8 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
     this.renderFrames = new WeakMap<Canvas, number>()
     this.activePointerRenderStops = new WeakMap<Canvas, () => void>()
     this.recomputeFrames = new WeakMap<Canvas, number>()
+    this.pendingRecomputeNodes = new WeakMap<Canvas, { nodes: Set<string>; fullSweep: boolean }>()
+    this.lastEdgeEndpoints = new WeakMap<Canvas, Map<string, { fromNode: string | undefined; toNode: string | undefined }>>()
     this.routerSideCache = new WeakMap<Canvas, WeakMap<CanvasNode, Map<string, { fromSide: Side; toSide: Side }>>>()
     this.wiredChoicePorts = new WeakSet<HTMLElement>()
 
@@ -244,7 +256,15 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
     // set so cycles in the router graph are safe.
     const recomputeAffected = (canvas: Canvas, edge: CanvasEdge) => this.onEdgeRouteAffected(canvas, edge)
     this.plugin.registerEvent(this.plugin.app.workspace.on("advanced-canvas:edge-created", recomputeAffected))
-    this.plugin.registerEvent(this.plugin.app.workspace.on("advanced-canvas:edge-removed", recomputeAffected))
+    this.plugin.registerEvent(this.plugin.app.workspace.on("advanced-canvas:edge-removed", (canvas: Canvas, edge: CanvasEdge) => {
+      recomputeAffected(canvas, edge)
+      // Clean up the tracked endpoints for this edge so the map doesn't grow unboundedly as edges
+      // are deleted over a long session. (onEdgeRouteAffected already used the endpoints above.)
+      const edgeId = (edge.getData() as CanvasEdgeDataWithDialogue).id
+      if (edgeId) {
+        this.lastEdgeEndpoints.get(canvas)?.delete(edgeId)
+      }
+    }))
     this.plugin.registerEvent(this.plugin.app.workspace.on("advanced-canvas:edge-changed", recomputeAffected))
     // LLM agent change: double-clicking a route edge inserts a route node at the click point,
     // splitting the edge into two (source→router, router→target) so the route styling is preserved.
@@ -259,10 +279,20 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
     // edge-changed never fires and the cascade would otherwise NOT re-evaluate validity. This is
     // the fix for "deleting a choice left the inherited line colored" — the router's outgoing edge
     // must now become BROKEN (choiceId gone) or UNKNOWN (all choices gone), reactively.
-    const recompute = (canvas: Canvas) => this.scheduleRecomputeAllRouters(canvas)
-    this.plugin.registerEvent(this.plugin.app.workspace.on("advanced-canvas:node-changed", (canvas: Canvas) => {
+    //
+    // Targeted: collect the routers fed by this node's OUTGOING edges (via edgeFrom) — only those
+    // could have a stale inherited choice — instead of recomputing every router. If the node has no
+    // outgoing edges, there's nothing to recompute.
+    this.plugin.registerEvent(this.plugin.app.workspace.on("advanced-canvas:node-changed", (canvas: Canvas, node: CanvasNode) => {
       rerender(canvas)
-      recompute(canvas)
+      const affected = new Set<string>()
+      for (const edge of this.edgesForNode(canvas, node, "from")) {
+        const data = edge.getData() as CanvasEdgeDataWithDialogue
+        if (data.toNode) {
+          affected.add(data.toNode)
+        }
+      }
+      this.scheduleRecomputeRoutersFor(canvas, affected)
     }))
     this.plugin.registerEvent(this.plugin.app.workspace.on(
       "advanced-canvas:node-moved",
@@ -920,35 +950,99 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
   }
 
   // LLM agent change: reactive router-transit recoloring. Fired on edge-created/removed/changed.
-  // We do NOT try to compute "which router was affected" from the edge's current fromNode/toNode,
-  // because that misses the key case: when a dragged edge is released on a new target, the edge's
-  // PREVIOUS toNode (a router that is no longer connected) doesn't appear in the event at all —
-  // so its outgoing edges would stay colored per a now-stale incoming set. Instead, coalesce the
-  // (frequent) edge events into a single rAF pass that recomputes EVERY router on the canvas
-  // against the settled graph state. routesEqual makes the no-op case (most routers unchanged)
-  // cheap, so a full sweep is fine.
-  private onEdgeRouteAffected(canvas: Canvas, _edge: CanvasEdge) {
-    this.scheduleRecomputeAllRouters(canvas)
+  // We collect the edge's CURRENT fromNode + toNode as "affected", PLUS any PREVIOUS endpoint that
+  // changed since the last event for this edge (a retarget detaches the old endpoint, whose outgoing
+  // routes are now stale). The rAF pass then recomputes only those routers (+ downstream cascade)
+  // instead of every router on the canvas.
+  //
+  // Why we track previous endpoints: edge.setData overwrites fromNode/toNode in the native call
+  // BEFORE firing edge-changed, so by event time getData() already reflects the NEW endpoint — the
+  // detached old one is lost unless we remembered it from the prior event.
+  private onEdgeRouteAffected(canvas: Canvas, edge: CanvasEdge) {
+    const edgeData = edge.getData() as CanvasEdgeDataWithDialogue
+    const edgeId = edgeData.id
+    const curFrom = edgeData.fromNode
+    const curTo = edgeData.toNode
+    const affected = new Set<string>()
+    if (curFrom) {
+      affected.add(curFrom)
+    }
+    if (curTo) {
+      affected.add(curTo)
+    }
+    // Add previous endpoints that differ — they may now be detached routers needing a recompute.
+    if (edgeId) {
+      let endpoints = this.lastEdgeEndpoints.get(canvas)
+      if (!endpoints) {
+        endpoints = new Map()
+        this.lastEdgeEndpoints.set(canvas, endpoints)
+      }
+      const prev = endpoints.get(edgeId)
+      if (prev) {
+        if (prev.fromNode && prev.fromNode !== curFrom) {
+          affected.add(prev.fromNode)
+        }
+        if (prev.toNode && prev.toNode !== curTo) {
+          affected.add(prev.toNode)
+        }
+      }
+      endpoints.set(edgeId, { fromNode: curFrom, toNode: curTo })
+    }
+    this.scheduleRecomputeRoutersFor(canvas, affected)
   }
 
   // LLM agent change: coalesce many edge-changed events (which fire on every edge render during
-  // pan/move/drag) into one recompute pass per frame. Mirrors scheduleRenderCanvas's pattern.
-  private scheduleRecomputeAllRouters(canvas: Canvas) {
+  // pan/move/drag) into one recompute pass per frame. Accumulates affected node ids; the rAF pass
+  // recomputes only those routers + their downstream cascade. If `fullSweep` is requested, every
+  // router is recomputed instead (the escape hatch, rarely needed).
+  private scheduleRecomputeRoutersFor(canvas: Canvas, affectedNodeIds: Set<string>, fullSweep = false) {
+    let pending = this.pendingRecomputeNodes.get(canvas)
+    if (!pending) {
+      pending = { nodes: new Set<string>(), fullSweep: false }
+      this.pendingRecomputeNodes.set(canvas, pending)
+    }
+    pending.fullSweep = pending.fullSweep || fullSweep
+    for (const id of affectedNodeIds) {
+      pending.nodes.add(id)
+    }
     if (this.recomputeFrames.has(canvas)) {
       return
     }
     const frameId = window.requestAnimationFrame(() => {
       this.recomputeFrames.delete(canvas)
-      this.recomputeAllRouters(canvas)
+      const state = this.pendingRecomputeNodes.get(canvas)
+      this.pendingRecomputeNodes.delete(canvas)
+      this.runRecompute(canvas, state)
     })
     this.recomputeFrames.set(canvas, frameId)
   }
 
-  // LLM agent change: recompute the outgoing color of every router on the canvas. Each router's
-  // recompute cascades downstream with a shared visited set, so a single sweep covers the whole
-  // graph (the visited set prevents redundant work on shared downstream routers).
-  private recomputeAllRouters(canvas: Canvas) {
+  // LLM agent change: full-sweep variant (recompute every router). Not currently on any hot path
+  // (both edge events and node-changed now use the targeted scheduleRecomputeRoutersFor), but kept
+  // as an escape hatch / fallback for any case where the affected set can't be determined cheaply.
+  private scheduleRecomputeAllRouters(canvas: Canvas) {
+    this.scheduleRecomputeRoutersFor(canvas, new Set<string>(), true)
+  }
+
+  // LLM agent change: run the recompute pass. If state.fullSweep, recompute every router; else
+  // recompute only the router nodes named in state.nodes (cascade still walks downstream via the
+  // visited set). routesEqual makes the no-op case cheap either way.
+  private runRecompute(canvas: Canvas, state: { nodes: Set<string>; fullSweep: boolean } | undefined) {
     const visited = new Set<string>()
+    if (state && !state.fullSweep && state.nodes.size > 0) {
+      for (const id of state.nodes) {
+        const node = canvas.nodes.get(id)
+        if (!node) {
+          continue
+        }
+        const nodeData = node.getData() as CanvasNodeDataWithDialogue
+        if (nodeData["x-dialogue"]?.router) {
+          this.recomputeRouterOutgoing(canvas, node, visited)
+        }
+      }
+      return
+    }
+    // Full sweep (explicitly requested, or no affected set known).
     for (const node of canvas.nodes.values()) {
       const nodeData = node.getData() as CanvasNodeDataWithDialogue
       if (nodeData["x-dialogue"]?.router) {
