@@ -620,6 +620,14 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
       const edgeData = edge.getData() as CanvasEdgeDataWithDialogue
 
       if (!this.getRoute(edgeData["x-dialogue"]?.route)) {
+        // LLM agent change: this is a DEFAULT (non-route) edge. If it used to be a route edge and
+        // carries a stale palette color, clear it so the line isn't drawn in a choice color that no
+        // longer corresponds to anything (e.g. a frame→router edge whose choice was deleted → its
+        // route was dropped but edge.color remained). A dialogue-node default edge should be neutral.
+        if (edgeData.color) {
+          const cleared: CanvasEdgeDataWithDialogue = { ...edgeData, color: undefined }
+          edge.setData(cleared)
+        }
         this.setEdgeLabelVisible(edge, true)
         // LLM agent change: default (non-route) edges that leave a choice frame from its right
         // side are re-anchored to the upper quarter of that side, where the visible default
