@@ -958,7 +958,9 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
   }
 
   private renderNodeRoutes(canvas: Canvas, node: CanvasNode) {
-    for (const edge of canvas.edges.values()) {
+    // LLM agent change: only iterate edges directly attached to this node (via the native adjacency
+    // index), instead of every edge on the canvas. O(attached) instead of O(E).
+    for (const edge of this.edgesForNode(canvas, node, "both")) {
       const edgeData = edge.getData() as CanvasEdgeDataWithDialogue
 
       if (
@@ -1192,7 +1194,9 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
     const outgoing: EdgeInfo[] = []
     const incoming: EdgeInfo[] = []
 
-    for (const edge of canvas.edges.values()) {
+    // LLM agent change: use the native adjacency index (O(1)) instead of scanning all edges (O(E)).
+    // getEdgesForNode returns the union of incoming + outgoing for this router.
+    for (const edge of this.edgesForNode(canvas, routerNode, "both")) {
       const data = edge.getData() as CanvasEdgeDataWithDialogue
       const edgeId = data.id
       if (!edgeId) {
@@ -1263,6 +1267,19 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
   private nodeCenter(node: CanvasNode): Position {
     const b = node.getBBox()
     return { x: (b.minX + b.maxX) / 2, y: (b.minY + b.maxY) / 2 }
+  }
+
+  // LLM agent change: O(1) lookup of a node's connected edges via Obsidian's native adjacency index
+  // (canvas.edgeFrom / canvas.edgeTo / getEdgesForNode), instead of an O(E) scan over all edges.
+  // direction: "from" → edges whose fromNode is `node` (outgoing), "to" → edges whose toNode is
+  // `node` (incoming), "both" → union. Returns an empty array if the node isn't indexed (defensive —
+  // the index is populated by addEdge/removeEdge before any event listener sees it, so this is rare).
+  private edgesForNode(canvas: Canvas, node: CanvasNode, direction: "from" | "to" | "both"): CanvasEdge[] {
+    if (direction === "both") {
+      return canvas.getEdgesForNode(node) ?? []
+    }
+    const set = direction === "from" ? canvas.edgeFrom.get(node) : canvas.edgeTo.get(node)
+    return set ? Array.from(set) : []
   }
 
   // LLM agent change: nearest face of the router to the given external point. Picks the axis with the
@@ -1423,7 +1440,14 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
     let validChoiceCount = 0
     let lastValidChoice: DialogueChoiceRouteData | null = null
 
-    for (const edge of canvas.edges.values()) {
+    // LLM agent change: scan only the edges INCOMING to this router (via the native edgeTo index),
+    // instead of every edge on the canvas. O(incoming) instead of O(E). We look up the node object
+    // once (edgeTo is keyed by CanvasNode, not id); if it's somehow gone, fall back to a full scan.
+    const routerNode = canvas.nodes.get(routerId)
+    const incomingEdges: CanvasEdge[] = routerNode
+      ? this.edgesForNode(canvas, routerNode, "to")
+      : Array.from(canvas.edges.values()).filter(e => (e.getData() as CanvasEdgeDataWithDialogue).toNode === routerId)
+    for (const edge of incomingEdges) {
       const data = edge.getData() as CanvasEdgeDataWithDialogue
       if (data.toNode !== routerId) {
         continue
@@ -1590,7 +1614,9 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
     const targetRoute = this.resolveOutgoingRoute(canvas, routerId)
     let anyChanged = false
 
-    for (const edge of canvas.edges.values()) {
+    // LLM agent change: scan only the edges OUTGOING from this router (via the native edgeFrom
+    // index), instead of every edge on the canvas. O(outgoing) instead of O(E).
+    for (const edge of this.edgesForNode(canvas, routerNode, "from")) {
       const data = edge.getData() as CanvasEdgeDataWithDialogue
       if (data.fromNode !== routerId) {
         continue

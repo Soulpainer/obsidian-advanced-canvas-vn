@@ -605,7 +605,9 @@ export default class DialogueRouterCanvasExtension extends CanvasExtension {
     const incomingColors: string[] = []
     const outgoingColors: string[] = []
 
-    for (const edge of canvas.edges.values()) {
+    // LLM agent change: scan only the edges attached to this node (via the native adjacency index),
+    // instead of every edge on the canvas. O(attached) instead of O(E).
+    for (const edge of this.edgesForNode(canvas, node, "both")) {
       const data = edge.getData() as CanvasEdgeDataWithNodes
       const route = data["x-dialogue"]?.route
       if (!route) {
@@ -799,20 +801,25 @@ export default class DialogueRouterCanvasExtension extends CanvasExtension {
   }
 
   private hasOutgoingEdge(canvas: Canvas, node: CanvasNode): boolean {
-    for (const edge of canvas.edges.values()) {
-      const edgeData = edge.getData() as CanvasEdgeDataWithNodes
-
-      if (edgeData.fromNode === node.id) {
-        return true
-      }
-    }
-
-    return false
+    // LLM agent change: O(1) check via the native edgeFrom index instead of an O(E) scan.
+    const outgoing = canvas.edgeFrom.get(node)
+    return !!outgoing && outgoing.size > 0
   }
 
   private isRouterNode(node: CanvasNode): boolean {
     const nodeData = node.getData() as CanvasNodeDataWithDialogue
     return nodeData["x-dialogue"]?.router?.type === "point"
+  }
+
+  // LLM agent change: O(1) lookup of a node's connected edges via Obsidian's native adjacency index
+  // (canvas.edgeFrom / canvas.edgeTo / getEdgesForNode), instead of an O(E) scan over all edges.
+  // direction: "from" → outgoing, "to" → incoming, "both" → union. Returns [] if not indexed.
+  private edgesForNode(canvas: Canvas, node: CanvasNode, direction: "from" | "to" | "both"): CanvasEdge[] {
+    if (direction === "both") {
+      return canvas.getEdgesForNode(node) ?? []
+    }
+    const set = direction === "from" ? canvas.edgeFrom.get(node) : canvas.edgeTo.get(node)
+    return set ? Array.from(set) : []
   }
 
   // LLM agent change: true for dialogue frames that actually have choices rendered (so the
