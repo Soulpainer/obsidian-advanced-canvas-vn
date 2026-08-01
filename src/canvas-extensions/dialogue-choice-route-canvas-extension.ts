@@ -934,29 +934,14 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
       colorId = this.getRouteCanvasColorId(choiceIndex)
     }
 
-    // LLM agent change: create the router node via createTextNode (not importData) so it's a
-    // fully-managed CanvasNode that selectOnly/Delete works on. We add x-dialogue data right after.
-    const routerNode = canvas.createTextNode({
-      pos: {
-        x: clickPos.x - routerSize / 2,
-        y: clickPos.y - routerSize / 2,
-      },
-      size: { width: routerSize, height: routerSize },
-    })
-    const routerNodeData = routerNode.getData() as CanvasNodeDataWithDialogue
-    const routerNextData: CanvasNodeDataWithDialogue = {
-      ...routerNodeData,
-      text: "",
-      width: routerSize,
-      height: routerSize,
-      "x-dialogue": {
-        ...routerNodeData["x-dialogue"],
-        router: { type: "point" },
-      },
-    }
-    routerNode.setData(routerNextData)
-
-    const routerId = routerNode.getData().id
+    // LLM agent change: generate the router node id UPFRONT and add the node via importData (not
+    // createTextNode) so the canvas never sees an intermediate inconsistent state. The prior
+    // createTextNode → setData → removeEdge → importData sequence let Obsidian re-render (via
+    // edge-rendered:after) between steps with an edge referencing a node whose data wasn't ready,
+    // which intermittently broke canvas rendering on long edges (problem #3). Now router node + both
+    // edges are built as data and applied in ONE importData call — the canvas transitions atomically
+    // from one stable state to another.
+    const routerId = `split-router-${Date.now()}`
     const stamp = Date.now()
 
     // LLM agent change: helper to build each split half's data. Both halves carry the SAME route as
@@ -973,9 +958,22 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
       },
     })
 
-    // Build the two edges (node already exists via createTextNode).
+    // Build the full import payload: router node + two edges, applied atomically.
     const importPayload = {
-      nodes: [],
+      nodes: [
+        {
+          id: routerId,
+          type: "text" as const,
+          text: "",
+          x: clickPos.x - routerSize / 2,
+          y: clickPos.y - routerSize / 2,
+          width: routerSize,
+          height: routerSize,
+          ["x-dialogue"]: {
+            router: { type: "point" },
+          },
+        },
+      ],
       edges: [
         // edge-1: source → router
         buildSplitEdge(`split-${stamp}-1`, sourceNodeId, routerId),
@@ -984,7 +982,7 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
       ],
     }
 
-    // Remove the old edge, then import the two new edges.
+    // Remove the old edge first, then import router + two edges in one atomic call.
     canvas.removeEdge(clickedEdge)
     canvas.importData(importPayload, false, false)
     canvas.pushHistory(canvas.getData())
@@ -1002,8 +1000,14 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
     // that theft. Multiple delays are kept ON PURPOSE: the theft's timing can vary between runs, the
     // extra focus() calls are effectively free, and a single missed re-assert brings the whole bug
     // back. selectOnly/setTarget alone never made Delete work — focus is the only thing that did.
+    //
+    // The router node is re-fetched from canvas by id (importData rebuilds node objects, so the
+    // node we'd have captured pre-import may be stale).
     window.requestAnimationFrame(() => {
-      const liveNode = canvas.nodes.get(routerNode.getData().id) ?? routerNode
+      const liveNode = canvas.nodes.get(routerId)
+      if (!liveNode) {
+        return
+      }
       const focusWrapper = () => canvas.wrapperEl?.focus()
       canvas.selectOnly(liveNode)
       canvas.nodeInteractionLayer?.setTarget(liveNode)

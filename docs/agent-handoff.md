@@ -8,7 +8,7 @@ Branches:
 - `main` — upstream Advanced Canvas.
 - `new-logic` — VN fork base.
 - `vn/dialogue-fixes` — stable: TS fixes, rebrand, upstream cleanup, choice-anchor geometry, CPU fixes, drag-to-spawn, choice-port drag (delegates to native onConnectionPointerdown), occupied-port lock, spawn-cancel cleanup, sequential modal opening (choice → frame).
-- `vn/edge-split-router` (CURRENT) — edge-split feature (double-click route edge → insert router node), color propagation, selection fixes. **#1 (post-split Delete) SOLVED, #2 (router as color transit — unbound routes) SOLVED (pending runtime verify), #3 (render-break on long edges) unsolved.**
+- `vn/edge-split-router` (CURRENT) — edge-split feature (double-click route edge → insert router node), color propagation, selection fixes. **#1 (post-split Delete) SOLVED, #2 (router as color transit) SOLVED, #3 (render-break on long edges) PREVENTATIVELY ADDRESSED via atomic importData (rollback tag `checkpoint-working-state-pre-atomic-split` if it regresses).**
 
 ## How to deploy & test
 
@@ -82,15 +82,25 @@ Original symptom: dragging a new edge FROM a router left it grey (no route), uns
 
 **Stale-color fix (edge retargeted):** the initial reactive listener tried to derive the affected router from the edge's current `fromNode`/`toNode`. That missed the key case: when a dragged edge is released on a *different* target, the PREVIOUS `toNode` (a router no longer connected) doesn't appear in the event, so its outgoing edges stayed colored per a now-stale incoming set. Fixed by replacing targeted recomputation with `scheduleRecomputeAllRouters` — a rAF-coalesced pass that recomputes EVERY router against the settled graph state. `routesEqual` makes the no-op case (most routers unchanged) cheap; reentrancy is bounded by the `recomputeFrames` dedup + `routesEqual` (a re-triggered second pass writes nothing). Coalescing is necessary because `edge-changed` fires on every edge render during pan/move/drag.
 
-### 3. Edge-split sometimes breaks canvas rendering — MEDIUM
+### 3. Edge-split sometimes breaks canvas rendering — PREVENTATIVELY ADDRESSED ✅ (verify in runtime)
 
-Splitting a **long** edge sometimes corrupts the canvas display (nodes/edges disappear or glitch) until the canvas is reloaded. The single-`importData` rewrite helped but didn't fully fix it.
+Splitting a **long** edge sometimes corrupted the canvas display (nodes/edges disappear or glitch) until the canvas was reloaded. Not reproducible at the time of the fix; addressed preventatively.
 
-**Root cause hypothesis:** `removeEdge(clickedEdge)` then `importData` happens while `edge-rendered:after` / `renderRouteEdge` may fire synchronously on the new edges, referencing nodes/edges in a partially-applied state.
+**Root cause (from commit 72f3fe9):** the split modified the canvas in steps — `createTextNode` (adds node) → `setData` (modifies) → `removeEdge` (deletes edge) → `importData` (adds edges). Between steps, Obsidian could re-render (via `edge-rendered:after`) in an inconsistent state (an edge referencing a node whose data isn't ready), which intermittently broke the canvas until reload.
 
-**Next steps to try:**
-- Defer the entire split operation (removeEdge + importData + selectOnly) into a single `requestAnimationFrame` or `setTimeout(0)` block, so it runs after Obsidian finishes processing the double-click event.
-- Or: use `canvas.setData()` (full canvas data replacement) instead of removeEdge + importData — build the complete node+edge list, set it atomically.
+**What happened:** commit `72f3fe9` rewrote split to be atomic (router node + both edges in one `importData`). But the unbound-route feature (`82572b4`) reintroduced `createTextNode` + `setData` because it needed control over the route payload — re-creating the very intermediate-state structure that caused #3. The bug wasn't *observed* after that (likely because the unbound refactor also made `renderRouteEdge` tolerant of partial state — it renders via the unbound color instead of bailing on `choiceIndex < 0` — and the rAF-deferred focus gives the canvas a frame to settle). But the structural risk was back.
+
+**Fix:** reverted the split to the atomic pattern — generate `routerId` upfront, build the router node + both edges as data, apply in ONE `importData`. The unbound route payload flows through unchanged (`splitRoute` is built the same way). The focus-fix re-fetches the node by `routerId` after `importData` (importData rebuilds node objects). The whole canvas transitions atomically from one stable state to another.
+
+**Checkpoint:** tag `checkpoint-working-state-pre-atomic-split` (commit `4ec6cdc`) marks the working state before this change.
+
+**⚠️ ROLLBACK INSTRUCTIONS:** if long-edge / rendering problems reappear on split, revert the atomic-split commit:
+```
+git revert <atomic-split-commit-hash>
+# or, to discard everything since the checkpoint:
+git reset --hard checkpoint-working-state-pre-atomic-split
+```
+The pre-atomic version (with `createTextNode` + `setData`) is known-working for the user as of this writing; #3 was not observed there.
 
 ### 4. Choice-port drag from OCCUPIED ports — LOW (mostly fixed)
 
