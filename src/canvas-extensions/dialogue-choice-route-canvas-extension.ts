@@ -926,35 +926,27 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
     canvas.pushHistory(canvas.getData())
     this.scheduleRenderCanvas(canvas)
 
-    // LLM agent change: select the router node. Root cause of "Delete doesn't work after split"
-    // is DOM FOCUS THEFT, not selection. Console probes confirmed (all true after split, yet Delete
-    // failed): node is in canvas.selection (size 1), getSelectionData().nodes has it, readonly/
-    // isDragging false, AND our rAF focus() puts focus on the wrapper — BUT something asynchronous
-    // (rendering of the freshly-imported edges / iframe content) steals focus to an
-    // `.embed-iframe.is-controlled` element AFTER our rAF. A real click works only because it's the
-    // last focus change, so the wrapper keeps focus when Delete fires.
+    // LLM agent change: select the router node after the split. Root cause of "Delete doesn't work
+    // after split" was DOM FOCUS THEFT — confirmed by console probes comparing the broken vs working
+    // states: after a split, activeElement was `.embed-iframe.is-controlled` (Delete's keypress never
+    // reached the canvas); after a real click, activeElement was the canvas wrapper (Delete worked).
+    // Everything else was identical (selection.size=1, getSelectionData nodes=1, readonly=false).
     //
-    // Fix: focus the wrapper after a longer delay so we run AFTER the iframe steals focus, and
-    // re-assert it a couple of times to win the race. The TEMP log reports the final activeElement
-    // so we learn which delay was enough (then the shorter ones can be dropped).
+    // Our rAF focus() does land on the wrapper, but the freshly-imported edges / iframe content
+    // render asynchronously and steal focus to `.embed-iframe.is-controlled` right after. So we
+    // re-assert focus on the wrapper at several delays (rAF + 50/150/400ms) to win the race past
+    // that theft. Multiple delays are kept ON PURPOSE: the theft's timing can vary between runs, the
+    // extra focus() calls are effectively free, and a single missed re-assert brings the whole bug
+    // back. selectOnly/setTarget alone never made Delete work — focus is the only thing that did.
     window.requestAnimationFrame(() => {
       const liveNode = canvas.nodes.get(routerNode.getData().id) ?? routerNode
       const focusWrapper = () => canvas.wrapperEl?.focus()
-      const focusNowAndReport = (label: string) => {
-        focusWrapper()
-        // [LLM agent TEMP] diagnostic — remove once the winning delay is known.
-        // eslint-disable-next-line obsidianmd/rule-custom-message -- temporary diagnostic
-        console.log("[LLM agent TEMP] post-split focus", label, "→",
-          activeDocument.activeElement === canvas.wrapperEl ? "wrapper" : activeDocument.activeElement?.className)
-      }
-
       canvas.selectOnly(liveNode)
       canvas.nodeInteractionLayer?.setTarget(liveNode)
-      focusNowAndReport("rAF")
-      // Re-assert focus past the iframe theft at increasing delays; pick the shortest that sticks.
-      window.setTimeout(() => focusNowAndReport("50ms"), 50)
-      window.setTimeout(() => focusNowAndReport("150ms"), 150)
-      window.setTimeout(() => focusNowAndReport("400ms"), 400)
+      focusWrapper()
+      window.setTimeout(focusWrapper, 50)
+      window.setTimeout(focusWrapper, 150)
+      window.setTimeout(focusWrapper, 400)
     })
   }
 

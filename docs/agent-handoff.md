@@ -8,7 +8,7 @@ Branches:
 - `main` — upstream Advanced Canvas.
 - `new-logic` — VN fork base.
 - `vn/dialogue-fixes` — stable: TS fixes, rebrand, upstream cleanup, choice-anchor geometry, CPU fixes, drag-to-spawn, choice-port drag (delegates to native onConnectionPointerdown), occupied-port lock, spawn-cancel cleanup, sequential modal opening (choice → frame).
-- `vn/edge-split-router` (CURRENT) — edge-split feature (double-click route edge → insert router node), color propagation, selection fixes. **Unstable / WIP.**
+- `vn/edge-split-router` (CURRENT) — edge-split feature (double-click route edge → insert router node), color propagation, selection fixes. **WIP: problem #1 (post-split Delete) SOLVED, #2 (router-edge color) fix applied (color-overwrite bug fixed; full inheritance may still need runtime check), #3 (render-break on long edges) unsolved.**
 
 ## How to deploy & test
 
@@ -37,34 +37,25 @@ npm run deploy          # build + copy to vault
 
 ## UNSOLVED PROBLEMS (on branch `vn/edge-split-router`)
 
-### 1. Router-node selection doesn't work (Delete broken) — HIGH
+### 1. Router-node selection doesn't work (Delete broken) — SOLVED ✅
 
-After edge-split creates a router node, `canvas.selectOnly(routerNode)` is called, but the node is **not properly selected** — Delete/Backspace doesn't remove it. The node looks highlighted but isn't in `canvas.selection` in a way Obsidian's delete handler accepts.
+**Root cause: DOM focus theft, not selection.** Console probes comparing the broken (post-split) vs working (post-click) states showed the ONLY difference was `activeDocument.activeElement`:
+- after split: `.embed-iframe.is-controlled` → Delete's keypress never reached the canvas → `e.onKeydown`/`e.deleteSelection` not called.
+- after a real click: `.canvas-wrapper` → Delete worked.
 
-**What was tried:**
-- `selectOnly` synchronously after `importData` — no effect.
-- `selectOnly` via `setTimeout(0)` — no effect.
-- `selectOnly` via `requestAnimationFrame` — no effect.
-- `createTextNode` instead of `importData` for the router node — the current approach, still broken.
-- `updateSelection(() => { deselectAll; selection.add(node) })` — **broke the entire canvas rendering** (reverted).
+Everything else was identical: `selection.size === 1`, `getSelectionData().nodes.length === 1`, `readonly === false`, `isDragging === false`, node identity intact (`canvas.nodes.get(id) === routerNode`). So selection-set membership, `nodeInteractionLayer.setTarget`, node identity, and `getSelectionData` were all **red herrings** — the node was correctly selected all along.
 
-**Current attempt (PENDING VERIFICATION):** re-focus `canvas.wrapperEl` at increasing delays after the split. Root cause was pinpointed via console probes comparing the broken (post-split, no Delete) vs working (post-click, Delete OK) states — the ONLY difference is `activeDocument.activeElement`:
+The rAF `selectOnly` + `wrapperEl.focus()` DID put focus on the wrapper momentarily, but the freshly-imported edges / iframe content render asynchronously and steal focus to `.embed-iframe.is-controlled` right after. A real click worked only because it was the last focus change.
 
-| state | `activeElement` className | on wrapper? | Delete |
-|---|---|---|---|
-| after split | `embed-iframe is-controlled` | **false** | ❌ |
-| after real click | `canvas-wrapper node-insert-event` | **true** | ✅ |
+**Fix (in `onEdgeDoubleClick`):** after `importData`, re-assert `canvas.wrapperEl.focus()` at rAF + 50/150/400ms to win the race past the theft. Multiple delays are kept ON PURPOSE — the theft's timing varies, extra `focus()` calls are free, and one missed re-assert brings the whole bug back.
 
-Everything else is identical: `selection.size === 1`, `getSelectionData().nodes.length === 1`, `readonly === false`, `isDragging === false`. So selection, identity, `setTarget`, `getSelectionData` are ALL ruled out — it's purely DOM focus. Our rAF `wrapperEl.focus()` does put focus on the wrapper momentarily (logged true), but something asynchronous (rendering of the freshly-imported edges / an iframe) steals focus to `.embed-iframe.is-controlled` right after, so by the time the user hits Delete, focus is off-canvas and the keypress never reaches Obsidian's canvas delete handler. A real click works only because it's the last focus change.
+**What was tried (dead ends, don't repeat):**
+- `selectOnly` sync / via `setTimeout(0)` / via `rAF` — focused on the wrong thing; selection was never the issue.
+- `updateSelection(() => { deselectAll; selection.add(node) })` — broke canvas rendering (reverted).
+- Synthesized `dispatchEvent(click)` — put node in selection but is untrusted, doesn't move focus, and masked the symptom (regression).
+- Single `wrapperEl.focus()` in rAF — correct idea, but stolen by async iframe rendering before Delete fired.
 
-Fix: re-assert `wrapperEl.focus()` at rAF + 50/150/400ms to land after the iframe theft. TEMP log reports the `activeElement` at each delay so we learn which is the minimum sufficient delay, then drop the rest.
-
-**Key observation:** `createRouterNode` in `dialogue-router-canvas-extension.ts` (line ~350) does `canvas.selectOnly(node)` after `createTextNode` + `setData`, and it works there. The difference: in edge-split, we also call `removeEdge` + `importData` for the two new edges between `createTextNode` and `selectOnly`. That import triggers edge rendering, which is what steals focus.
-
-**Next steps to try (if no delay works):**
-- `wrapperEl.tabIndex = 0` before `.focus()` (some elements need tabindex to be focusable reliably).
-- Listen for the iframe's `load`/`focus` event and re-focus the wrapper in its handler (event-driven, not delay-guessing).
-- Grep Obsidian's keybind: maybe Delete is bound to a specific element (not `activeDocument`) — if so, dispatch a `keydown` directly on `canvas.wrapperEl` instead of relying on focus.
+**Lesson:** when a canvas keyboard action fails after a mutation, check `activeDocument.activeElement` FIRST — selection state is usually fine. See lesson 15.
 
 ### 2. Edges dragged from router are grey / can't be split — HIGH
 
@@ -132,4 +123,4 @@ Panning the canvas with the middle mouse button while the cursor is over an edge
 
 14. **`createTextNode` initialization is async relative to `setData`.** The patcher's `runAfterInitialized` defers `node-added`/`node-changed` until the native node `initialize()` runs, and the `setData` patch guards the `node-changed` trigger behind `node.initialized && !node.isDirty`. So `selectOnly` / render calls immediately after `createTextNode` + `setData` may run against a not-yet-initialized node. Defer with `requestAnimationFrame` if you need the fully-initialized node.
 
-15. **A synthesized `dispatchEvent(click)` is untrusted and does NOT move DOM focus.** It can put a node into `canvas.selection` (verified: `selection.has` returned `true`), but keyboard handlers (Delete/Backspace) still won't fire because focus is off-canvas. Worse, it masks the symptom — the node looks selected, so the user must deselect+reselect to recover. After canvas mutations that steal focus (`importData`, `removeEdge`), restore both `canvas.selectOnly(node)` AND `canvas.wrapperEl.focus()` if you need keyboard interaction. Don't try to fake clicks to drive selection.
+15. **Canvas keyboard actions (Delete/Backspace) depend on `activeDocument.activeElement`, not on `canvas.selection`.** A node can be correctly selected (`selection.has === true`, `getSelectionData().nodes.length === 1`, identity intact) yet Delete still does nothing — because `onKeydown`/`deleteSelection` only fires when the canvas wrapper holds focus. After mutations that render asynchronously (`importData` of edges, iframe content), focus gets stolen to `.embed-iframe.is-controlled`; a single `wrapperEl.focus()` is also stolen moments later. **When a canvas keyboard action fails after a mutation, check `activeDocument.activeElement` FIRST** (vs `canvas.wrapperEl`) — don't waste cycles on selection/identity/getSelectionData. Re-assert `wrapperEl.focus()` at several delays (rAF + 50/150/400ms) to win the race; the delays are cheap and a missed re-assert brings the whole bug back. Do NOT fake clicks via `dispatchEvent` — untrusted events don't move focus and mask the symptom.
