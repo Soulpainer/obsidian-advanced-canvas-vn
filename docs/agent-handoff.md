@@ -48,12 +48,13 @@ After edge-split creates a router node, `canvas.selectOnly(routerNode)` is calle
 - `createTextNode` instead of `importData` for the router node — the current approach, still broken.
 - `updateSelection(() => { deselectAll; selection.add(node) })` — **broke the entire canvas rendering** (reverted).
 
+**Current attempt (PENDING VERIFICATION):** replaced `selectOnly` with a **synthesized click** — rAF-deferred `PointerEvent("pointerdown")` → `PointerEvent("pointerup")` → `MouseEvent("click")` dispatched on `routerNode.nodeEl` at its bbox center. Rationale: since even rAF-deferred `selectOnly` failed, the issue is the *selection path*, not timing — driving it through Obsidian's native event-driven path (what a real click does) bypasses whatever `importData` invalidates. A `[LLM agent TEMP]` `console.log` reports `canvas.selection.has(routerNode)` post-click. **Awaiting deploy + manual test.** Fallback to `selectOnly` if `nodeEl` is missing.
+
 **Key observation:** `createRouterNode` in `dialogue-router-canvas-extension.ts` (line ~350) does `canvas.selectOnly(node)` after `createTextNode` + `setData`, and it works there. The difference: in edge-split, we also call `removeEdge` + `importData` for the two new edges between `createTextNode` and `selectOnly`. One of those operations likely clears/invalidates selection.
 
-**Next steps to try:**
+**Next steps to try (if click-sim fails):**
 - Reorder: `selectOnly` BEFORE `removeEdge`/`importData`.
-- Or: don't use `selectOnly` at all; instead simulate a click on the node element (`node.nodeEl.dispatchEvent(new MouseEvent(...))`).
-- Or: check if `createTextNode` returns a node whose `nodeEl` is already in the DOM and selectable — maybe the issue is the node isn't fully rendered when selectOnly is called.
+- Full-defer: wrap the entire split (`removeEdge` + `importData` + `selectOnly`) in a single `requestAnimationFrame`/`setTimeout(0)` — also the candidate fix for problem #3.
 - Compare with `spawnNodeAtDrop` in router-ext which also creates a node + edges and may or may not select — does Delete work there?
 
 ### 2. Edges dragged from router are grey / can't be split — HIGH
@@ -65,9 +66,11 @@ When dragging a new edge FROM a router node (via its native connection point), t
 - The `edge-created` event from the patcher may not carry enough info to distinguish "dragged from router" vs "dragged from frame".
 - `findInheritedRoute` may not find the incoming edge (timing — the incoming edge may not be in `canvas.edges` yet when the new edge is created).
 
-**Next steps to try:**
+**Bug found & fixed (color-overwrite in `saveRoute`):** even when inheritance *does* reach `saveRoute`, the router source has no `frame.choices`, so `choices.findIndex(...) === -1` and `Math.max(-1, 0) = 0` **overwrote the inherited `route.choiceIndex` to 0** (blue). Fix in `saveRoute`: if the lookup fails AND `route.choiceIndex` is already set (by a prior `saveRoute` / split), preserve it. This fixes the *color*; it does NOT fix "grey" (which means route never got written — that's the runtime-diagnosis path below).
+
+**Next steps to try (if still grey after the color fix):**
 - Add a temporary `console.log` in `onEdgeCreatedFromChoicePort` to confirm it fires when dragging from a router.
-- Check if `edge-created` event fires at all for router-originated drags (vs only for choice-port drags).
+- Check if `edge-created` event fires at all for router-originated drags (vs only for choice-port drags). Note from patcher: `addEdge` triggers `edge-created` BEFORE `next.call` adds it to `canvas.edges`, and `createTextNode`'s `node-added`/`node-changed` fire async via `runAfterInitialized` — so the `node.initialized && !node.isDirty` guard on `setData` can suppress `node-changed` until init completes. Timing-sensitive.
 - If the event doesn't fire: hook into `node-changed` or `edge-changed` instead, or add a `pointerdown` listener on router nodes (like choice ports) that delegates to `onConnectionPointerdown` and sets a `pendingRouterInherit` flag.
 
 ### 3. Edge-split sometimes breaks canvas rendering — MEDIUM
@@ -115,3 +118,7 @@ Panning the canvas with the middle mouse button while the cursor is over an edge
 11. **Choice anchor geometry is calibrated from real DOM measurements:** row height 22px (no failure) / +30px (with failure), success port at row center (half row height), failure port at 38px from row top, list anchored 8px from node bottom, 4px gap between rows. See `getChoiceAnchorGeometric`.
 
 12. **`AGENTS.md` requires LLM-agent marking** on all changes — commit prefix `[LLM agent]` and in-code comments.
+
+13. **A router node has no `frame.choices`, so any `choices.findIndex(...)` in a code path that also serves routers returns -1.** Don't blanket-coerce that to 0 — it silently overwrites a legitimately-inherited/cached `choiceIndex`. When the route already carries a cached `choiceIndex` (set by a prior `saveRoute` or edge-split), preserve it; only fall back to 0 as a last resort. (Bug behind problem #2's wrong color on router-originated edges.)
+
+14. **`createTextNode` initialization is async relative to `setData`.** The patcher's `runAfterInitialized` defers `node-added`/`node-changed` until the native node `initialize()` runs, and the `setData` patch guards the `node-changed` trigger behind `node.initialized && !node.isDirty`. So `selectOnly` / render calls immediately after `createTextNode` + `setData` may run against a not-yet-initialized node. Defer with `requestAnimationFrame` if you need the fully-initialized node.

@@ -412,9 +412,15 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
     const edgeData = edge.getData() as CanvasEdgeDataWithDialogue
     const sourceNodeData = sourceNode.getData() as CanvasNodeDataWithDialogue
     const choices = sourceNodeData["x-dialogue"]?.frame?.choices ?? []
-    const choiceIndex = choices.findIndex(choice => choice.choiceId === route.choiceId)
+    let choiceIndex = choices.findIndex(choice => choice.choiceId === route.choiceId)
     // LLM agent change: cache the choice index in the route data so renderRouteEdge can apply the
-    // correct color even when the edge's fromNode is a router (which has no choices).
+    // correct color even when the edge's fromNode is a router (which has no choices). When the
+    // source is a router, choices is [] so findIndex returns -1 — preserve the choiceIndex that was
+    // already cached on the route (by a prior saveRoute or an edge-split) instead of forcing 0,
+    // which would mis-color inherited router-originated edges blue.
+    if (choiceIndex < 0 && route.choiceIndex !== undefined) {
+      choiceIndex = route.choiceIndex
+    }
     const routeWithIndex = { ...route, choiceIndex: Math.max(choiceIndex, 0) }
     const nextXDialogue: DialogueEdgeData = {
       ...edgeData["x-dialogue"],
@@ -920,9 +926,37 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
     canvas.pushHistory(canvas.getData())
     this.scheduleRenderCanvas(canvas)
 
-    // LLM agent change: select the router node. It was created via createTextNode (a fully managed
-    // node), so selectOnly works and Delete is functional.
-    canvas.selectOnly(routerNode)
+    // LLM agent change: select the router node. selectOnly() (synchronous, rAF-deferred, and
+    // setTimeout-deferred) all failed to put the node into canvas.selection in a state Obsidian's
+    // delete handler accepts (see handoff problem #1). Hypothesis: after importData the selection
+    // path is invalidated, not just delayed. So instead drive selection through the SAME native
+    // event-driven path a real click takes — synthesize pointerdown→pointerup→click on the node's
+    // body element. Deferred one rAF so the node is fully initialized/rendered (createTextNode's
+    // initialize is async vs our setData, see runAfterInitialized in the patcher).
+    window.requestAnimationFrame(() => {
+      const nodeEl = (routerNode as any).nodeEl as HTMLElement | undefined
+      if (!nodeEl) {
+        // Fallback: if there's no DOM element yet, fall back to the direct API.
+        canvas.selectOnly(routerNode)
+        return
+      }
+
+      const rect = nodeEl.getBoundingClientRect()
+      const clientX = rect.left + rect.width / 2
+      const clientY = rect.top + rect.height / 2
+      const eventInit = { bubbles: true, cancelable: true, clientX, clientY, button: 0, view: window }
+
+      nodeEl.dispatchEvent(new PointerEvent("pointerdown", eventInit))
+      nodeEl.dispatchEvent(new PointerEvent("pointerup", eventInit))
+      nodeEl.dispatchEvent(new MouseEvent("click", eventInit))
+
+      // [LLM agent TEMP] diagnostic — remove once selection-after-split is confirmed working.
+      // Tells us (in the console, Ctrl+Shift+I) whether the synthesized click actually put the
+      // router into Obsidian's selection set. If false, we'll know click-simulation didn't work
+      // and try a different approach (reorder / full-defer).
+      // eslint-disable-next-line obsidianmd/rule-custom-message -- temporary diagnostic, removed once verified
+      console.log("[LLM agent TEMP] post-split selection has router:", canvas.selection.has(routerNode))
+    })
   }
 
   // LLM agent change: get the index of a choice by id in the source node's choices.
