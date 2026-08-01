@@ -159,6 +159,10 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
   // renderFrames.has(). Creating them at the top of init() is the safe ordering.
   private renderFrames!: WeakMap<Canvas, number>
   private activePointerRenderStops!: WeakMap<Canvas, () => void>
+  // LLM agent change: rAF-coalesced pending router-transit recomputes, one per canvas. Coalesces
+  // the many edge-changed events that fire during a drag/move into a single recompute pass that
+  // runs against the settled graph state. Created in init() for the same ordering reason as above.
+  private recomputeFrames!: WeakMap<Canvas, number>
   // LLM agent change: choice ports we've already attached a custom drag pointerdown handler to,
   // so re-rendering a node doesn't double-bind. Re-checked against the live DOM on every render.
   private wiredChoicePorts!: WeakSet<HTMLElement>
@@ -184,6 +188,7 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
     // (see the field declaration comment above for why this ordering matters).
     this.renderFrames = new WeakMap<Canvas, number>()
     this.activePointerRenderStops = new WeakMap<Canvas, () => void>()
+    this.recomputeFrames = new WeakMap<Canvas, number>()
     this.wiredChoicePorts = new WeakSet<HTMLElement>()
 
     this.plugin.registerEvent(this.plugin.app.workspace.on(
@@ -815,22 +820,38 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
   }
 
   // LLM agent change: reactive router-transit recoloring. Fired on edge-created/removed/changed.
-  // For an affected edge, the router whose incoming set may have changed is its toNode (an edge
-  // feeding INTO a router changes that router's outgoing color). We also recompute the fromNode if
-  // it's a router, in case the edge itself changed (e.g. its choice binding via modal). Each
-  // recompute cascades downstream with a shared visited set. Reads fromNode/toNode from the edge's
-  // own data so it works even on edge-removed (edge already gone from canvas.edges, but data alive).
-  private onEdgeRouteAffected(canvas: Canvas, edge: CanvasEdge) {
-    const edgeData = edge.getData() as CanvasEdgeDataWithDialogue
-    const visited = new Set<string>()
+  // We do NOT try to compute "which router was affected" from the edge's current fromNode/toNode,
+  // because that misses the key case: when a dragged edge is released on a new target, the edge's
+  // PREVIOUS toNode (a router that is no longer connected) doesn't appear in the event at all —
+  // so its outgoing edges would stay colored per a now-stale incoming set. Instead, coalesce the
+  // (frequent) edge events into a single rAF pass that recomputes EVERY router on the canvas
+  // against the settled graph state. routesEqual makes the no-op case (most routers unchanged)
+  // cheap, so a full sweep is fine.
+  private onEdgeRouteAffected(canvas: Canvas, _edge: CanvasEdge) {
+    this.scheduleRecomputeAllRouters(canvas)
+  }
 
-    for (const nodeId of [edgeData.toNode, edgeData.fromNode]) {
-      if (!nodeId) {
-        continue
-      }
-      const node = canvas.nodes.get(nodeId)
-      const nodeData = node?.getData() as CanvasNodeDataWithDialogue | undefined
-      if (node && nodeData?.["x-dialogue"]?.router) {
+  // LLM agent change: coalesce many edge-changed events (which fire on every edge render during
+  // pan/move/drag) into one recompute pass per frame. Mirrors scheduleRenderCanvas's pattern.
+  private scheduleRecomputeAllRouters(canvas: Canvas) {
+    if (this.recomputeFrames.has(canvas)) {
+      return
+    }
+    const frameId = window.requestAnimationFrame(() => {
+      this.recomputeFrames.delete(canvas)
+      this.recomputeAllRouters(canvas)
+    })
+    this.recomputeFrames.set(canvas, frameId)
+  }
+
+  // LLM agent change: recompute the outgoing color of every router on the canvas. Each router's
+  // recompute cascades downstream with a shared visited set, so a single sweep covers the whole
+  // graph (the visited set prevents redundant work on shared downstream routers).
+  private recomputeAllRouters(canvas: Canvas) {
+    const visited = new Set<string>()
+    for (const node of canvas.nodes.values()) {
+      const nodeData = node.getData() as CanvasNodeDataWithDialogue
+      if (nodeData["x-dialogue"]?.router) {
         this.recomputeRouterOutgoing(canvas, node, visited)
       }
     }
