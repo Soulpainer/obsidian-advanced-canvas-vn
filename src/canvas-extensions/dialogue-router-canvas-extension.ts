@@ -629,8 +629,15 @@ export default class DialogueRouterCanvasExtension extends CanvasExtension {
     const hasOutgoing = outgoingColors.length > 0
 
     if (!hasIncoming || !hasOutgoing) {
-      // partially connected OR isolated → grey warning. Use a clearly MUTED grey (not the light
-      // unknown-line grey, which looks white on dark themes). --text-muted is mid-grey on both themes.
+      // partially connected OR isolated → grey warning by default. BUT if the one connected side is
+      // BROKEN (a deleted choice), paint the node red so the broken state is visible even on a
+      // partially-connected router — a red node signals 'this has a broken route', grey would hide it.
+      const brokenColor = resolveCssColor("var(--dialogue-route-broken-color)")
+      const presentColors = hasIncoming ? incomingColors : outgoingColors
+      if (presentColors.length > 0 && presentColors.every(c => c === brokenColor)) {
+        return { color: "var(--dialogue-route-broken-color)", state: "colored" }
+      }
+      // otherwise muted grey warning (partially connected / isolated, or unknown-only).
       return { color: "var(--text-muted)", state: "warning" }
     }
 
