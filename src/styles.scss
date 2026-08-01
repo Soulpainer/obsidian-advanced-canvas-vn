@@ -42,14 +42,14 @@
 
 // LLM agent change: dashed patterns for the broken/unknown route states. Obsidian's native edges
 // are SVG paths; we set data-path on them and apply a stroke-dasharray here. short-dashed (failure)
-// is a native Obsidian pattern; these two are our own.
+// is a native Obsidian pattern; these two are our own. The selector targets ANY path element with
+// the data-path attribute inside the canvas wrapper (Obsidian uses different path class names
+// across versions, so we key off the data attribute, not a class).
 .canvas-wrapper {
-  // broken: red dashed — choice reference lost
-  .canvas-edge-path[data-path="dashed-broken"] {
+  [data-path="dashed-broken"] {
     stroke-dasharray: 6 4;
   }
-  // unknown: grey dashed — no incoming source
-  .canvas-edge-path[data-path="dashed-unknown"] {
+  [data-path="dashed-unknown"] {
     stroke-dasharray: 2 4;
   }
 }

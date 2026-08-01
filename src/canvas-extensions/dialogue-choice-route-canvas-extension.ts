@@ -1099,15 +1099,26 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
     } else if (route.type === "unbound") {
       colorCss = this.getRouteColorCss(-1, "success")
     } else {
-      // choice
+      // choice route. Resolve the choice against the SOURCE's choices. Two cases:
+      //   - fromNode is a FRAME with choices → the choiceId must resolve here; if it doesn't, the
+      //     choice was deleted and this edge is BROKEN (red dashed). The cached choiceIndex must NOT
+      //     mask this — it's a stale color hint for an absent choice.
+      //   - fromNode is a ROUTER (no choices) → we can't validate choiceId here, so fall back to the
+      //     cached choiceIndex for color. (The router's own cascade already set this edge's route
+      //     type to broken/unknown/unbound if its source was invalid; a choice type here means it
+      //     was deemed valid upstream.)
+      const isFrameSource = choices.length > 0
       let choiceIndex = choices.findIndex(choice => choice.choiceId === route.choiceId)
-      // LLM agent change: if fromNode is a router (no choices), fall back to the cached choiceIndex
-      // stored in the route data by saveRoute. This keeps the color correct for split edges.
-      if (choiceIndex < 0 && route.choiceIndex !== undefined) {
+      if (choiceIndex < 0 && !isFrameSource && route.choiceIndex !== undefined) {
         choiceIndex = route.choiceIndex
       }
-      if (choiceIndex < 0) {
-        // Choice route whose choice can't be resolved — render as unbound so it's at least visible.
+      if (choiceIndex < 0 && isFrameSource) {
+        // Choice deleted from the source frame → render as broken (red dashed), don't fall back to
+        // a solid color that hides the broken reference.
+        colorCss = "var(--dialogue-route-broken-color)"
+        dashPath = "dashed-broken"
+      } else if (choiceIndex < 0) {
+        // Router source with no cached index — can't determine color, show neutral.
         colorCss = this.getRouteColorCss(-1, "success")
       } else {
         colorCss = this.getRouteColorCss(choiceIndex, route.outcome)
