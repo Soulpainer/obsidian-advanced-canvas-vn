@@ -35,6 +35,12 @@ export default class DialogueRouterCanvasExtension extends CanvasExtension {
   // start (edge-connection-dragging:before) and consumed by the native connection-drop-menu
   // handler to decide whether to add our 'Add dialogue frame / route point' items.
   private lastDragSourceNode: CanvasNode | null = null
+  // LLM agent change: remembers the native dragged edge itself (E1), captured at drag start. When
+  // the drag ends by SPAWNING a node, spawnNodeAtDrop creates a NEW edge (E2) — the native E1 is
+  // now a dangling duplicate and must be removed explicitly, otherwise enforceSingleOutgoingEdge
+  // sees two outgoing edges and non-deterministically deletes one (often E2 → the spawn edge
+  // vanishes). Symmetric with choice-route-ext's choiceDragNativeEdge.
+  private lastDragNativeEdge: CanvasEdge | null = null
   // LLM agent change: last canvas-space position where the pointer was released, captured on the
   // active canvas's pointerup. The connection-drop-menu event gives us no coordinates, so we use
   // this to spawn the node where the user dropped.
@@ -102,12 +108,17 @@ export default class DialogueRouterCanvasExtension extends CanvasExtension {
       (canvas: Canvas) => this.onSelectionChanged(canvas)
     ))
 
-    // LLM agent change: capture the source node of an edge drag at its start, so the native
-    // connection-drop-menu handler can add our spawn items only for dialogue-node sources.
+    // LLM agent change: capture the source node AND the native dragged edge of an edge drag at its
+    // start, so (a) the native connection-drop-menu handler can add our spawn items only for
+    // dialogue-node sources, and (b) spawnNodeAtDrop can remove the native dragged edge (E1) once
+    // the spawn creates a proper edge (E2) — see lastDragNativeEdge.
     this.plugin.registerEvent(this.plugin.app.workspace.on(
       "advanced-canvas:edge-connection-dragging:before",
-      (canvas: Canvas, edge: CanvasEdge) => {
+      (canvas: Canvas, edge: CanvasEdge, _event: PointerEvent, newEdge: boolean) => {
         this.lastDragSourceNode = edge?.from?.node ?? null
+        // Only a FRESH native drag (newEdge) produces a dangling edge we need to clean up; re-grabbing
+        // an existing edge on a move drag would mis-record a non-dangling edge.
+        this.lastDragNativeEdge = newEdge ? edge : null
       }
     ))
 
@@ -429,6 +440,21 @@ export default class DialogueRouterCanvasExtension extends CanvasExtension {
     }
     canvas.importData({ nodes: [], edges: [edgeData] }, false, false)
 
+    // LLM agent change: remove the dangling native dragged edge (E1) now that the spawn has created
+    // a proper edge (E2, above). Without this, E1 lingers and enforceSingleOutgoingEdge sees two
+    // outgoing edges from the router, then non-deterministically deletes one by id-sort — usually
+    // deleting E2 (the spawn edge the user just created), so the spawn looks disconnected.
+    if (this.lastDragNativeEdge) {
+      const nativeEdge = this.lastDragNativeEdge
+      this.lastDragNativeEdge = null
+      // Guard against removing E2 itself (same edge object) — shouldn't happen (E2 is freshly
+      // imported), but the equality check is cheap insurance.
+      const isE2 = nativeEdge.getData().id === edgeData.id
+      if (!isE2) {
+        canvas.removeEdge(nativeEdge)
+      }
+    }
+
     canvas.selectOnly(node)
     canvas.pushHistory(canvas.getData())
 
@@ -483,7 +509,16 @@ export default class DialogueRouterCanvasExtension extends CanvasExtension {
     const outgoingEdges = [...canvas.edges.values()]
       .filter(candidate => {
         const candidateData = candidate.getData() as CanvasEdgeDataWithNodes
-        return candidateData.fromNode === edgeData.fromNode
+        if (candidateData.fromNode !== edgeData.fromNode) {
+          return false
+        }
+        // LLM agent change: ignore edges with a FLOATING 'to' end (drag-in-progress). Such an edge
+        // isn't a real outgoing connection yet (candidate.to.node is undefined while the user is
+        // still dragging the loose end to a target). Counting it here made enforceSingleOutgoingEdge
+        // race with the spawn flow — a freshly-dragged edge could be deleted before it connected,
+        // and a spawn edge (E2) competed against the dangling drag edge (E1) and lost non-
+        // deterministically. Only fully-connected edges count toward the one-outgoing quota.
+        return candidate.to?.node != null
       })
       .sort((a, b) => {
         const aId = (a.getData() as CanvasEdgeDataWithNodes).id
