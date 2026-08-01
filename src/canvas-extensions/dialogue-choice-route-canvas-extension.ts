@@ -266,12 +266,19 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
       }
     }))
     this.plugin.registerEvent(this.plugin.app.workspace.on("advanced-canvas:edge-changed", recomputeAffected))
-    // LLM agent change: double-clicking a route edge inserts a route node at the click point,
-    // splitting the edge into two (source→router, router→target) so the route styling is preserved.
+    // LLM agent change: double-click dispatch. A double-click on a ROUTER NODE with exactly 1
+    // incoming + 1 outgoing route edge collapses it (removes the router, stitches source→target
+    // directly — the inverse of the split below). Otherwise fall through to the edge-split handler
+    // (double-click on a route edge inserts a router at the click point). Both operations live here
+    // so split/collapse stay symmetric and close together.
     this.plugin.registerEvent(this.plugin.app.workspace.on(
       "advanced-canvas:double-click",
-      (canvas: Canvas, event: MouseEvent, preventDefault: { value: boolean }) =>
+      (canvas: Canvas, event: MouseEvent, preventDefault: { value: boolean }) => {
+        if (this.onRouterNodeDoubleClick(canvas, event, preventDefault)) {
+          return
+        }
         this.onEdgeDoubleClick(canvas, event, preventDefault)
+      }
     ))
     const rerender = (canvas: Canvas) => this.scheduleRenderCanvas(canvas)
     // LLM agent change: recompute router-transit colors when a node changes. A frame's choices can
@@ -1226,6 +1233,131 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
       window.setTimeout(focusWrapper, 150)
       window.setTimeout(focusWrapper, 400)
     })
+  }
+
+  // LLM agent change: the COLLAPSE — inverse of onEdgeDoubleClick. Double-clicking a router node
+  // that is a clean 1-in/1-out transit removes the router and stitches source→target directly,
+  // carrying the outgoing route (what the target saw before collapse). Returns true if it handled
+  // the double-click (so the caller skips the edge-split path).
+  private onRouterNodeDoubleClick(
+    canvas: Canvas,
+    event: MouseEvent,
+    preventDefault: { value: boolean }
+  ): boolean {
+    const target = event.target
+    if (!(target instanceof HTMLElement) && !(target instanceof SVGElement)) {
+      return false
+    }
+
+    const nodeEl = (target as HTMLElement).closest(".canvas-node.dialogue-canvas-router-node") as HTMLElement | null
+    if (!nodeEl) {
+      return false // not a double-click on a router node — let the edge-split path run
+    }
+
+    if (canvas.readonly) {
+      return false
+    }
+
+    // Resolve the DOM element back to a CanvasNode.
+    let routerNode: CanvasNode | null = null
+    for (const candidate of canvas.nodes.values()) {
+      if (this.getNodeElement(candidate) === nodeEl) {
+        routerNode = candidate
+        break
+      }
+    }
+    if (!routerNode) {
+      return false
+    }
+    const routerData = routerNode.getData() as CanvasNodeDataWithDialogue
+    if (!routerData["x-dialogue"]?.router) {
+      return false
+    }
+    const routerId = routerData.id
+
+    // Find the single incoming + single outgoing ROUTE edges. Anything else (0/2+ on either side,
+    // or a non-route edge) means this isn't a collapsible transit — bail without handling.
+    let incomingEdge: CanvasEdge | null = null
+    let outgoingEdge: CanvasEdge | null = null
+    for (const edge of this.edgesForNode(canvas, routerNode, "both")) {
+      const data = edge.getData() as CanvasEdgeDataWithDialogue
+      if (!this.getRoute(data["x-dialogue"]?.route)) {
+        return false // a non-route edge is attached — not a clean route transit
+      }
+      if (data.toNode === routerId) {
+        if (incomingEdge) {
+          return false // more than one incoming
+        }
+        incomingEdge = edge
+      } else if (data.fromNode === routerId) {
+        if (outgoingEdge) {
+          return false // more than one outgoing
+        }
+        outgoingEdge = edge
+      }
+    }
+    if (!incomingEdge || !outgoingEdge) {
+      return false // need exactly one of each to stitch
+    }
+
+    const inData = incomingEdge.getData() as CanvasEdgeDataWithDialogue
+    const outData = outgoingEdge.getData() as CanvasEdgeDataWithDialogue
+    const sourceNodeId = inData.fromNode
+    const targetNodeId = outData.toNode
+    if (!sourceNodeId || !targetNodeId) {
+      return false
+    }
+
+    // This is a collapsible route transit — prevent Obsidian's default double-click (inline editing).
+    preventDefault.value = true
+
+    // Build the merged edge carrying the OUTGOING route (what the target saw before collapse —
+    // preserves the downstream-visible color/semantics). The reactive cascade will re-validate it
+    // against the new source after importData.
+    const outRoute = this.getRoute(outData["x-dialogue"]?.route)!
+    let mergedRoute: DialogueRouteData
+    let colorId: `${number}` | undefined
+    if (outRoute.type === "choice") {
+      const choiceIndex = outRoute.choiceIndex !== undefined
+        ? outRoute.choiceIndex
+        : Math.max(this.getChoiceIndex(canvas, sourceNodeId, outRoute.choiceId!), 0)
+      mergedRoute = {
+        type: "choice",
+        choiceId: outRoute.choiceId,
+        outcome: outRoute.outcome,
+        choiceIndex,
+      }
+      colorId = this.getRouteCanvasColorId(choiceIndex)
+    } else {
+      // unbound / broken / unknown — carry through as-is, no palette color id.
+      mergedRoute = { type: outRoute.type } as DialogueRouteData
+      colorId = undefined
+    }
+
+    const mergedEdgeId = crypto.randomUUID()
+    const mergedEdge: CanvasEdgeDataWithDialogue = {
+      id: mergedEdgeId,
+      fromNode: sourceNodeId,
+      fromSide: "right" as Side,
+      toNode: targetNodeId,
+      toSide: "left" as Side,
+      ...(colorId !== undefined ? { color: colorId } : {}),
+      ["x-dialogue"]: {
+        route: mergedRoute,
+      },
+    }
+
+    // Atomic collapse: remove both old edges, then the router node, then import the merged edge.
+    // Order matters — edges first so the canvas never sees an edge referencing the about-to-be-
+    // deleted node; importData last adds the merged edge against the settled state. One stable→
+    // stable transition, mirroring the split's atomicity.
+    canvas.removeEdge(incomingEdge)
+    canvas.removeEdge(outgoingEdge)
+    canvas.removeNode(routerNode)
+    canvas.importData({ nodes: [], edges: [mergedEdge] }, false, false)
+    canvas.pushHistory(canvas.getData())
+    this.scheduleRenderCanvas(canvas)
+    return true
   }
 
   // LLM agent change: get the index of a choice by id in the source node's choices.
