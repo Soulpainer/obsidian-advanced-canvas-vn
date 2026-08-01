@@ -170,6 +170,11 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
   // the many edge-changed events that fire during a drag/move into a single recompute pass that
   // runs against the settled graph state. Created in init() for the same ordering reason as above.
   private recomputeFrames!: WeakMap<Canvas, number>
+  // LLM agent change: per-render-pass cache of computed router-edge sides, so every edge of a given
+  // router sees a consistent side assignment within one renderCanvas pass (important for the rule
+  // "1 input → opposite the output"). Keyed canvas → (router node → (edgeId → {fromSide,toSide})).
+  // Cleared at the start of each renderCanvas call. See resolveRouterEdgeSide / computeRouterEdgeSides.
+  private routerSideCache!: WeakMap<Canvas, WeakMap<CanvasNode, Map<string, { fromSide: Side; toSide: Side }>>>
   // LLM agent change: choice ports we've already attached a custom drag pointerdown handler to,
   // so re-rendering a node doesn't double-bind. Re-checked against the live DOM on every render.
   private wiredChoicePorts!: WeakSet<HTMLElement>
@@ -196,6 +201,7 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
     this.renderFrames = new WeakMap<Canvas, number>()
     this.activePointerRenderStops = new WeakMap<Canvas, () => void>()
     this.recomputeFrames = new WeakMap<Canvas, number>()
+    this.routerSideCache = new WeakMap<Canvas, WeakMap<CanvasNode, Map<string, { fromSide: Side; toSide: Side }>>>()
     this.wiredChoicePorts = new WeakSet<HTMLElement>()
 
     this.plugin.registerEvent(this.plugin.app.workspace.on(
@@ -627,6 +633,9 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
       this.renderCanvasReadOnly(canvas)
       return
     }
+    // LLM agent change: fresh per-render cache for router-edge side assignment. Built lazily as
+    // each router's edges are resolved during this pass.
+    this.routerSideCache.set(canvas, new WeakMap<CanvasNode, Map<string, { fromSide: Side; toSide: Side }>>())
     for (const edge of canvas.edges.values()) {
       const edgeData = edge.getData() as CanvasEdgeDataWithDialogue
       const route = this.getRoute(edgeData["x-dialogue"]?.route)
@@ -678,6 +687,8 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
   // LLM agent change: read-only render path — same as renderCanvas but never calls setData (the
   // broken-validation persistence above mutates data, which a locked canvas must not allow).
   private renderCanvasReadOnly(canvas: Canvas) {
+    // LLM agent change: fresh per-render cache for router-edge side assignment (mirrors renderCanvas).
+    this.routerSideCache.set(canvas, new WeakMap<CanvasNode, Map<string, { fromSide: Side; toSide: Side }>>())
     for (const edge of canvas.edges.values()) {
       const edgeData = edge.getData() as CanvasEdgeDataWithDialogue
       if (!this.getRoute(edgeData["x-dialogue"]?.route)) {
@@ -1122,6 +1133,125 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
     return choices.findIndex(choice => choice?.choiceId === choiceId)
   }
 
+  // LLM agent change: pick which SIDE of a router node a given edge should attach to, based on the
+  // geometry of the OTHER endpoint. Only router nodes get dynamic sides — frame/target sides stay as
+  // stored in the edge data. Computed per render-pass and cached (routerSideCache) so every edge of
+  // one router agrees on the assignment within a pass (needed by the "1 input → opposite of output"
+  // rule). Returns the cached side for the requested edge+role, or falls back to the stored side.
+  //
+  // Rules (see plan):
+  //   - outgoing (this router is fromNode): side = nearest face to the target node's center.
+  //   - incoming (this router is toNode):
+  //       exactly 1 incoming → opposite of the (single) outgoing side (or nearest-to-source if no out)
+  //       several incoming  → each nearest to its own source (like outgoing)
+  private resolveRouterEdgeSide(
+    canvas: Canvas,
+    routerNode: CanvasNode,
+    edge: CanvasEdge,
+    role: "from" | "to",
+    fallbackSide: Side
+  ): Side {
+    const canvasCache = this.routerSideCache.get(canvas)
+    if (!canvasCache) {
+      return fallbackSide
+    }
+    let nodeMap = canvasCache.get(routerNode)
+    if (!nodeMap) {
+      nodeMap = this.computeRouterEdgeSides(canvas, routerNode)
+      canvasCache.set(routerNode, nodeMap)
+    }
+    const edgeId = edge.getData().id
+    if (!edgeId) {
+      return fallbackSide
+    }
+    const entry = nodeMap.get(edgeId)
+    if (!entry) {
+      return fallbackSide
+    }
+    return role === "from" ? entry.fromSide : entry.toSide
+  }
+
+  // LLM agent change: the core side-assignment algorithm for one router. Walks its edges once,
+  // classifies incoming/outgoing, computes sides per the rules, returns edgeId → {fromSide, toSide}.
+  private computeRouterEdgeSides(canvas: Canvas, routerNode: CanvasNode): Map<string, { fromSide: Side; toSide: Side }> {
+    const routerId = routerNode.getData().id
+    const routerBbox = routerNode.getBBox()
+    const routerCenter = { x: (routerBbox.minX + routerBbox.maxX) / 2, y: (routerBbox.minY + routerBbox.maxY) / 2 }
+
+    type EdgeInfo = { edgeId: string; role: "from" | "to"; otherNode?: CanvasNode }
+    const outgoing: EdgeInfo[] = []
+    const incoming: EdgeInfo[] = []
+
+    for (const edge of canvas.edges.values()) {
+      const data = edge.getData() as CanvasEdgeDataWithDialogue
+      const edgeId = data.id
+      if (!edgeId) {
+        continue
+      }
+      if (data.fromNode === routerId) {
+        const target = data.toNode ? canvas.nodes.get(data.toNode) : undefined
+        outgoing.push({ edgeId, role: "from", otherNode: target })
+      } else if (data.toNode === routerId) {
+        const source = data.fromNode ? canvas.nodes.get(data.fromNode) : undefined
+        incoming.push({ edgeId, role: "to", otherNode: source })
+      }
+    }
+
+    const result = new Map<string, { fromSide: Side; toSide: Side }>()
+
+    // Outgoing: each independently picks the face nearest its target.
+    let singleOutgoingSide: Side | null = null
+    for (const out of outgoing) {
+      const side = out.otherNode
+        ? this.nearestSide(routerCenter, this.nodeCenter(out.otherNode))
+        : ("right" as Side)
+      result.set(out.edgeId, { fromSide: side, toSide: "left" })
+      if (outgoing.length === 1) {
+        singleOutgoingSide = side
+      }
+    }
+
+    // Incoming: 1 → opposite of the single outgoing (if any); several → each nearest its source.
+    for (const inc of incoming) {
+      let side: Side
+      if (incoming.length === 1 && singleOutgoingSide) {
+        side = this.oppositeSide(singleOutgoingSide)
+      } else if (inc.otherNode) {
+        side = this.nearestSide(routerCenter, this.nodeCenter(inc.otherNode))
+      } else {
+        side = "left"
+      }
+      result.set(inc.edgeId, { fromSide: "right", toSide: side })
+    }
+
+    return result
+  }
+
+  private nodeCenter(node: CanvasNode): Position {
+    const b = node.getBBox()
+    return { x: (b.minX + b.maxX) / 2, y: (b.minY + b.maxY) / 2 }
+  }
+
+  // LLM agent change: nearest face of the router to the given external point. Picks the axis with the
+  // larger delta and the direction along it. Ties (|dx| === |dy|) go to the horizontal face.
+  private nearestSide(from: Position, to: Position): Side {
+    const dx = to.x - from.x
+    const dy = to.y - from.y
+    if (Math.abs(dx) >= Math.abs(dy)) {
+      return dx >= 0 ? "right" : "left"
+    }
+    return dy >= 0 ? "bottom" : "top"
+  }
+
+  private oppositeSide(side: Side): Side {
+    switch (side) {
+      case "right": return "left"
+      case "left": return "right"
+      case "top": return "bottom"
+      case "bottom": return "top"
+    }
+  }
+
   private renderRouteEdge(canvas: Canvas, edge: CanvasEdge) {
     const edgeData = edge.getData() as CanvasEdgeDataWithDialogue
     const route = this.getRoute(edgeData["x-dialogue"]?.route)
@@ -1187,14 +1317,32 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
     // For router-source nodes, use the bbox center as anchor (no choice port to anchor to).
     const isRouterSource = choices.length === 0
 
+    // LLM agent change: dynamic side assignment for ROUTER endpoints. When the source is a router,
+    // its side is computed geometrically (nearest face to target / opposite for single inputs),
+    // not read from edge.from.side. Frame sources keep their stored side (choice-port anchoring).
+    const fromSide: Side = isRouterSource
+      ? this.resolveRouterEdgeSide(canvas, sourceNode, edge, "from", edge.from.side)
+      : edge.from.side
+
     // LLM agent change: anchor choice — frame source anchors to the choice port, router source
     // anchors to its bbox edge center (routers have no choice ports). Non-choice routes always use
     // the bbox-center anchor (they have no choice port by definition).
     const anchor = (isRouterSource || route.type !== "choice")
-      ? this.getRouterAnchor(sourceNode, edge.from.side)
+      ? this.getRouterAnchor(sourceNode, fromSide)
       : this.getChoiceAnchor(canvas, sourceNode, route.choiceId!, route.outcome!)
-    const target = this.getEdgeTargetAnchor(canvas, edge, edgeData)
-    const path = this.buildBezierPath(anchor, target, edge.from.side, edge.to.side)
+
+    // LLM agent change: if the TARGET is also a router, compute its side dynamically too (the
+    // getEdgeTargetAnchor will read this). Otherwise keep the stored side.
+    let toSide: Side = edge.to.side
+    if (edgeData.toNode) {
+      const targetNode = canvas.nodes.get(edgeData.toNode)
+      const targetData = targetNode?.getData() as CanvasNodeDataWithDialogue | undefined
+      if (targetNode && targetData?.["x-dialogue"]?.router) {
+        toSide = this.resolveRouterEdgeSide(canvas, targetNode, edge, "to", edge.to.side)
+      }
+    }
+    const target = this.getEdgeTargetAnchorForSide(canvas, edge, edgeData, toSide)
+    const path = this.buildBezierPath(anchor, target, fromSide, toSide)
 
     edge.center = {
       x: (anchor.x + target.x) / 2,
@@ -1559,6 +1707,26 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
     }
 
     return edge.bezier.to
+  }
+
+  // LLM agent change: variant of getEdgeTargetAnchor that takes an EXPLICIT side (used when the
+  // target is a router and the side was computed dynamically via resolveRouterEdgeSide, instead of
+  // read from edge.to.side). Falls back to getEdgeTargetAnchor when the target isn't resolvable.
+  private getEdgeTargetAnchorForSide(
+    canvas: Canvas,
+    edge: CanvasEdge,
+    edgeData: CanvasEdgeDataWithDialogue,
+    side: Side
+  ): Position {
+    const targetNode = edgeData.toNode ? canvas.nodes.get(edgeData.toNode) : edge.to?.node
+    if (!targetNode) {
+      return edge.bezier.to
+    }
+    const bbox = targetNode.getBBox()
+    if (side === "left") return { x: bbox.minX, y: (bbox.minY + bbox.maxY) / 2 }
+    if (side === "right") return { x: bbox.maxX, y: (bbox.minY + bbox.maxY) / 2 }
+    if (side === "top") return { x: (bbox.minX + bbox.maxX) / 2, y: bbox.minY }
+    return { x: (bbox.minX + bbox.maxX) / 2, y: bbox.maxY } // bottom
   }
 
   private buildBezierPath(from: Position, to: Position, fromSide: string, toSide: string): string {
