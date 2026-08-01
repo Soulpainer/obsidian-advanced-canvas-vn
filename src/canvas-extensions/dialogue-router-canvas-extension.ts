@@ -4,8 +4,9 @@
 import { Menu, Notice } from "obsidian"
 import { Canvas, CanvasEdge, CanvasNode, Position } from "src/@types/Canvas"
 import { Side } from "src/@types/AdvancedJsonCanvas"
-import { DialogueNodeData } from "src/@types/DialogueCanvas"
+import { DialogueFailureRouteData, DialogueNodeData } from "src/@types/DialogueCanvas"
 import CanvasHelper from "src/utils/canvas-helper"
+import { resolveCssColor, routeToColorCss } from "src/utils/dialogue-route-color"
 import CanvasExtension from "./canvas-extension"
 
 type CanvasNodeDataWithDialogue = ReturnType<CanvasNode["getData"]> & {
@@ -20,6 +21,7 @@ type CanvasEdgeDataWithNodes = ReturnType<CanvasEdge["getData"]> & {
   id: string
   fromNode?: string
   toNode?: string
+  ["x-dialogue"]?: { route?: DialogueFailureRouteData }
 }
 
 export default class DialogueRouterCanvasExtension extends CanvasExtension {
@@ -105,7 +107,21 @@ export default class DialogueRouterCanvasExtension extends CanvasExtension {
 
     this.plugin.registerEvent(this.plugin.app.workspace.on(
       "advanced-canvas:edge-removed",
-      (canvas: Canvas) => this.onSelectionChanged(canvas)
+      (canvas: Canvas, edge: CanvasEdge) => {
+        this.onSelectionChanged(canvas)
+        // LLM agent change: re-render router nodes that were connected to the removed edge — their
+        // color may change (e.g. they lose their only incoming/outgoing → grey warning).
+        const edgeData = edge.getData() as CanvasEdgeDataWithNodes
+        for (const nodeId of [edgeData.fromNode, edgeData.toNode]) {
+          if (!nodeId) {
+            continue
+          }
+          const node = canvas.nodes.get(nodeId)
+          if (node && this.isRouterNode(node)) {
+            this.renderRouterNode(canvas, node)
+          }
+        }
+      }
     ))
 
     // LLM agent change: capture the source node AND the native dragged edge of an edge drag at its
@@ -541,6 +557,19 @@ export default class DialogueRouterCanvasExtension extends CanvasExtension {
   private onEdgeChanged(canvas: Canvas, edge: CanvasEdge) {
     this.enforceSingleOutgoingEdge(canvas, edge)
     this.syncSelectedRouterInteraction(canvas)
+    // LLM agent change: a router node's COLOR depends on its connected edges, so an edge change
+    // must re-render the router nodes on both ends (if they are routers). Reads fromNode/toNode
+    // from the edge's own data so it works even mid-mutation.
+    const edgeData = edge.getData() as CanvasEdgeDataWithNodes
+    for (const nodeId of [edgeData.fromNode, edgeData.toNode]) {
+      if (!nodeId) {
+        continue
+      }
+      const node = canvas.nodes.get(nodeId)
+      if (node && this.isRouterNode(node)) {
+        this.renderRouterNode(canvas, node)
+      }
+    }
   }
 
   private renderAllRouters() {
@@ -553,6 +582,84 @@ export default class DialogueRouterCanvasExtension extends CanvasExtension {
     }, 100)
   }
 
+  // LLM agent change: resolve the color a router NODE should be painted, based on its incoming and
+  // outgoing route edges. Rules (a "valid" edge is any route edge — choice/unbound/broken/unknown;
+  // default grey edges are ignored):
+  //   - 1 valid incoming + 1 valid outgoing of the SAME color → that color (the node "becomes" the
+  //     single choice flowing through it, including broken=red / unknown=grey).
+  //   - ≥1 incoming AND ≥1 outgoing, but colors differ or there are several → WHITE (valid but
+  //     ambiguous).
+  //   - 0 valid incoming OR 0 valid outgoing (one side empty) → GREY warning (partially connected).
+  //   - 0 and 0 (isolated) → GREY (we do NOT auto-delete; user decided to keep isolated nodes).
+  // Returns { color: cssString, state: 'colored'|'white'|'warning' }.
+  private resolveNodeColor(canvas: Canvas, node: CanvasNode): { color: string; state: "colored" | "white" | "warning" } {
+    const nodeId = node.getData().id
+    const incomingColors: string[] = []
+    const outgoingColors: string[] = []
+
+    for (const edge of canvas.edges.values()) {
+      const data = edge.getData() as CanvasEdgeDataWithNodes
+      const route = data["x-dialogue"]?.route
+      if (!route) {
+        continue // default edge — not a route, ignore
+      }
+
+      if (data.toNode === nodeId) {
+        // incoming — color from THIS edge's fromNode's choices
+        const color = this.edgeRouteColor(canvas, edge, data, "from")
+        if (color) {
+          incomingColors.push(color)
+        }
+      }
+      if (data.fromNode === nodeId) {
+        // outgoing — color from THIS edge's toNode... no: a route's color comes from its SOURCE
+        // (fromNode). For an outgoing edge from this router, the source is the router itself, but
+        // the router has no choices. The color was already resolved+cached when the cascade set the
+        // route, so use routeToColorCss against the router's (empty) choices — it falls back to the
+        // cached choiceIndex / themed vars correctly.
+        const color = this.edgeRouteColor(canvas, edge, data, "from")
+        if (color) {
+          outgoingColors.push(color)
+        }
+      }
+    }
+
+    const hasIncoming = incomingColors.length > 0
+    const hasOutgoing = outgoingColors.length > 0
+
+    if (!hasIncoming || !hasOutgoing) {
+      // partially connected OR isolated → grey warning
+      return { color: "var(--dialogue-route-unknown-color)", state: "warning" }
+    }
+
+    if (incomingColors.length === 1 && outgoingColors.length === 1 && incomingColors[0] === outgoingColors[0]) {
+      return { color: incomingColors[0]!, state: "colored" }
+    }
+
+    // valid on both sides but ambiguous → white
+    return { color: "var(--background-primary)", state: "white" }
+  }
+
+  // LLM agent change: compute the CSS color of a route edge for node-coloring purposes. Resolves
+  // against the edge's source node's choices (the fromNode), via the shared routeToColorCss helper
+  // so the node color always matches the edge color. Returns null if the route shouldn't count
+  // (it won't happen — every route has a color — but keeps the call sites honest).
+  private edgeRouteColor(
+    canvas: Canvas,
+    _edge: CanvasEdge,
+    data: CanvasEdgeDataWithNodes,
+    _side: "from" | "to"
+  ): string | null {
+    const route = data["x-dialogue"]?.route
+    if (!route) {
+      return null
+    }
+    const sourceNode = data.fromNode ? canvas.nodes.get(data.fromNode) : undefined
+    const sourceData = sourceNode?.getData() as CanvasNodeDataWithDialogue | undefined
+    const sourceChoices = sourceData?.["x-dialogue"]?.frame?.choices ?? []
+    return routeToColorCss(route, sourceChoices)
+  }
+
   private renderRouterNode(canvas: Canvas, node: CanvasNode) {
     const nodeEl = this.getNodeElement(node)
 
@@ -563,6 +670,8 @@ export default class DialogueRouterCanvasExtension extends CanvasExtension {
     if (!this.isRouterNode(node)) {
       nodeEl.removeClass("dialogue-canvas-router-node")
       nodeEl.removeClass("dialogue-canvas-router-node-is-selected")
+      nodeEl.style.removeProperty("--dialogue-router-color")
+      nodeEl.removeAttribute("data-router-state")
       return
     }
 
@@ -572,6 +681,13 @@ export default class DialogueRouterCanvasExtension extends CanvasExtension {
     } else {
       nodeEl.removeClass("dialogue-canvas-router-node-is-selected")
     }
+
+    // LLM agent change: paint the node per its incoming/outgoing routes (see resolveNodeColor).
+    const { color, state } = this.resolveNodeColor(canvas, node)
+    const resolved = resolveCssColor(color)
+    nodeEl.style.setProperty("--dialogue-router-color", resolved)
+    nodeEl.setAttribute("data-router-state", state)
+
     this.enforceRouterSize(node)
   }
 

@@ -18,6 +18,7 @@ import {
   DialogueUnknownRouteData,
 } from "src/@types/DialogueCanvas"
 import CanvasHelper from "src/utils/canvas-helper"
+import { getRouteColorCss, resolveCssColor } from "src/utils/dialogue-route-color"
 import CanvasExtension from "./canvas-extension"
 // LLM agent change: removed imports of EditDialogueFrameModal, DialogueFrameEditorValue and the
 // dialogue markdown loaders — they were only used by the deleted openFrameModal()/saveFrame()
@@ -1152,7 +1153,7 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
       colorCss = "var(--dialogue-route-broken-color)"
       dashPath = "dashed-broken"
     } else if (route.type === "unbound") {
-      colorCss = this.getRouteColorCss(-1, "success")
+      colorCss = getRouteColorCss(-1, "success")
     } else {
       // choice route. Resolve the choice against the SOURCE's choices. Two cases:
       //   - fromNode is a FRAME with choices → the choiceId must resolve here; if it doesn't, the
@@ -1174,9 +1175,9 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
         dashPath = "dashed-broken"
       } else if (choiceIndex < 0) {
         // Router source with no cached index — can't determine color, show neutral.
-        colorCss = this.getRouteColorCss(-1, "success")
+        colorCss = getRouteColorCss(-1, "success")
       } else {
-        colorCss = this.getRouteColorCss(choiceIndex, route.outcome)
+        colorCss = getRouteColorCss(choiceIndex, route.outcome)
         if (route.outcome === "failure") {
           dashPath = "short-dashed"
         }
@@ -1575,7 +1576,7 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
   }
 
   private applyEdgeColor(edge: CanvasEdge, cssColor: string) {
-    const resolvedColor = this.resolveCssColor(cssColor)
+    const resolvedColor = resolveCssColor(cssColor)
 
     edge.lineGroupEl?.style.setProperty("--canvas-color", resolvedColor)
     edge.lineEndGroupEl?.style.setProperty("--canvas-color", resolvedColor)
@@ -1587,16 +1588,6 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
     edge.toLineEnd?.el?.querySelector("polygon")?.setAttribute("style", `fill: ${resolvedColor}; stroke: ${resolvedColor};`)
   }
 
-  private resolveCssColor(cssColor: string): string {
-    const probe = activeDocument.createElement("span")
-    probe.style.color = cssColor
-    activeDocument.body.appendChild(probe)
-    const resolvedColor = getComputedStyle(probe).color
-    probe.remove()
-
-    return resolvedColor || cssColor
-  }
-
   private getRouteCanvasColorId(choiceIndex: number): `${number}` {
     // LLM agent change: return a template-literal-number type (e.g. "1".."8") so the value
     // satisfies the project's narrow `CanvasColor = \`${number}\` | \`#${string}\`` union
@@ -1604,21 +1595,8 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
     return String(choiceIndex % 8 + 1) as `${number}`
   }
 
-  private getRouteColorCss(choiceIndex: number, outcome: DialogueChoiceRouteOutcome): string {
-    // LLM agent change: choiceIndex < 0 means "unbound" — a route edge not tied to a specific choice
-    // (e.g. leaving a router with zero/multiple incoming routes). Returns the neutral unbound color.
-    if (choiceIndex < 0) {
-      return "var(--dialogue-route-unbound-color)"
-    }
-
-    const colorIndex = choiceIndex % 8 + 1
-
-    if (outcome === "failure") {
-      return `var(--dialogue-choice-failure-color-${colorIndex})`
-    }
-
-    return `var(--dialogue-choice-color-${colorIndex})`
-  }
+  // LLM agent change: getRouteColorCss and resolveCssColor moved to src/utils/dialogue-route-color.ts
+  // so the router extension can share the exact same color logic (node color must match edge color).
 
   private getMinimumNodeHeightForChoices(choices: DialogueChoiceData[]): number {
     if (choices.length === 0) {
