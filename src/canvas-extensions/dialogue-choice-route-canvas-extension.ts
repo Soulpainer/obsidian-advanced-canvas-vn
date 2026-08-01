@@ -351,7 +351,9 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
       return
     }
 
-    this.openBindRouteModal(canvas, edge, openFrameEditorAfter)
+    // LLM agent change: this modal is reached from onEdgeNeedsRoute, which only fires for a
+    // FRESHLY-SPAWNED edge (spawn flow). So a cancel here SHOULD remove the just-created edge.
+    this.openBindRouteModal(canvas, edge, openFrameEditorAfter, true)
   }
 
   private onPopupMenuCreated(canvas: Canvas) {
@@ -392,7 +394,7 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
     }
   }
 
-  private openBindRouteModal(canvas: Canvas, edge: CanvasEdge, openFrameEditorAfter = false) {
+  private openBindRouteModal(canvas: Canvas, edge: CanvasEdge, openFrameEditorAfter = false, isFreshSpawn = false) {
     const edgeData = edge.getData() as CanvasEdgeDataWithDialogue
     const sourceNode = edgeData.fromNode ? canvas.nodes.get(edgeData.fromNode) : undefined
     const sourceNodeData = sourceNode?.getData() as CanvasNodeDataWithDialogue | undefined
@@ -422,10 +424,12 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
           }
         }
       },
-      // LLM agent change: if the user cancels binding a route to a freshly-spawned node, tell the
-      // frame extension to remove the node + edge.
+      // LLM agent change: if the user cancels binding a route to a FRESHLY-SPAWNED node, tell the
+      // frame extension to remove the node + edge. But if this modal was opened from the "Bind
+      // Choice Route" context menu on an EXISTING edge (isFreshSpawn=false), cancelling must NOT
+      // delete the line — the edge existed before and the user is just editing/not-binding.
       onClose: wasSubmitted => {
-        if (!wasSubmitted) {
+        if (!wasSubmitted && isFreshSpawn) {
           this.plugin.app.workspace.trigger(
             "advanced-canvas:dialogue-spawn-cancel",
             canvas,
