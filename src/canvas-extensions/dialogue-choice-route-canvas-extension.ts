@@ -1218,21 +1218,26 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
 
   // LLM agent change: resolve the route that a router's OUTGOING edge should carry, based on the
   // router's incoming route edges. Classifies each incoming edge, then applies the rules:
-  //   - 0 incoming route edges                    → UNKNOWN  (no source connected — grey dashed)
-  //   - ALL incoming edges are broken             → BROKEN   (red dashed)
-  //   - has non-broken edges (broken ones ignored):
-  //       exactly 1 valid CHOICE                  → CHOICE   (inherit its color)
-  //       else (multiple choices / unbound / unknown present) → UNBOUND (solid grey)
+  //   - 0 incoming route edges, OR only UNKNOWN incoming        → UNKNOWN  (no source — grey dashed)
+  //   - ALL incoming edges are BROKEN (choice deleted)          → BROKEN   (red dashed)
+  //   - has non-broken, non-unknown edges (those ignored):
+  //       exactly 1 valid CHOICE                                → CHOICE   (inherit its color)
+  //       else (multiple choices / unbound present)             → UNBOUND  (solid grey)
+  //
+  // "unknown" propagates: an incoming unknown edge means "no source upstream", which is the same
+  // as having no incoming at all — so a router fed only by unknown edges emits unknown downstream.
+  // (Contrast with unbound: an incoming unbound means "valid but ambiguous", which makes the
+  // outgoing unbound solid-grey.)
   //
   // "Broken" classification of an incoming edge:
   //   - type "broken" already                                  → broken
   //   - type "choice" AND its fromNode is a frame AND its choiceId is NOT in that frame's choices
   //                                                              → broken (live validity check)
   //   - type "choice" from a router (no choices to check)       → trusted as valid (the upstream
-  //     router's own cascade already re-typed it broken if its source was invalid)
-  // This is the heart of the router-as-color-transit feature.
+  //     router's own cascade already re-typed it broken/unknown if its source was invalid)
   private resolveOutgoingRoute(canvas: Canvas, routerId: string): DialogueRouteData {
     let hasAny = false
+    let onlyUnknown = true
     let allBroken = true
     let validChoiceCount = 0
     let lastValidChoice: DialogueChoiceRouteData | null = null
@@ -1250,7 +1255,14 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
 
       // Classify this incoming edge.
       if (route.type === "broken") {
-        // already broken — counts toward allBroken but is otherwise ignored
+        // already broken — counts toward allBroken but is otherwise ignored. Doesn't clear
+        // onlyUnknown (a mix of broken + unknown still has no valid source).
+        continue
+      }
+      if (route.type === "unknown") {
+        // unknown = no source upstream. Doesn't provide a color, doesn't count as broken, but also
+        // doesn't clear onlyUnknown — see the comment above about unknown propagation.
+        allBroken = false
         continue
       }
       if (route.type === "choice") {
@@ -1267,15 +1279,22 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
         }
         // valid choice
         allBroken = false
+        onlyUnknown = false
         validChoiceCount++
         lastValidChoice = route
         continue
       }
-      // type unbound or unknown — valid but carries no choice color
+      // type unbound — valid but carries no choice color. This is a real (if ambiguous) source,
+      // so it clears onlyUnknown: the outgoing becomes unbound, not unknown.
       allBroken = false
+      onlyUnknown = false
     }
 
-    if (!hasAny) {
+    if (!hasAny || onlyUnknown) {
+      // No incoming routes at all, OR every incoming was unknown (no source upstream) → the
+      // outgoing has no source either → unknown (grey dashed). This is the propagation fix: a
+      // chain of routers fed only by unknown stays unknown to the end, instead of flipping to
+      // solid unbound.
       return { type: "unknown" }
     }
     if (allBroken) {
