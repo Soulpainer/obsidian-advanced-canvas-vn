@@ -594,6 +594,11 @@ export default class DialogueRouterCanvasExtension extends CanvasExtension {
   // Returns { color: cssString, state: 'colored'|'white'|'warning' }.
   private resolveNodeColor(canvas: Canvas, node: CanvasNode): { color: string; state: "colored" | "white" | "warning" } {
     const nodeId = node.getData().id
+    // LLM agent change: store RESOLVED rgb colors (not raw var() strings), because different route
+    // types can map to visually-identical colors via different CSS variables (e.g. unknown and
+    // unbound are both grey, but --dialogue-route-unknown-color !== --dialogue-route-unbound-color
+    // as strings — so a string === check would wrongly call them different and flip the node to
+    // white). Resolving to rgb first means "same color to the eye" === "same color to the node".
     const incomingColors: string[] = []
     const outgoingColors: string[] = []
 
@@ -605,18 +610,12 @@ export default class DialogueRouterCanvasExtension extends CanvasExtension {
       }
 
       if (data.toNode === nodeId) {
-        // incoming — color from THIS edge's fromNode's choices
         const color = this.edgeRouteColor(canvas, edge, data, "from")
         if (color) {
           incomingColors.push(color)
         }
       }
       if (data.fromNode === nodeId) {
-        // outgoing — color from THIS edge's toNode... no: a route's color comes from its SOURCE
-        // (fromNode). For an outgoing edge from this router, the source is the router itself, but
-        // the router has no choices. The color was already resolved+cached when the cascade set the
-        // route, so use routeToColorCss against the router's (empty) choices — it falls back to the
-        // cached choiceIndex / themed vars correctly.
         const color = this.edgeRouteColor(canvas, edge, data, "from")
         if (color) {
           outgoingColors.push(color)
@@ -640,10 +639,10 @@ export default class DialogueRouterCanvasExtension extends CanvasExtension {
     return { color: "var(--background-primary)", state: "white" }
   }
 
-  // LLM agent change: compute the CSS color of a route edge for node-coloring purposes. Resolves
-  // against the edge's source node's choices (the fromNode), via the shared routeToColorCss helper
-  // so the node color always matches the edge color. Returns null if the route shouldn't count
-  // (it won't happen — every route has a color — but keeps the call sites honest).
+  // LLM agent change: compute the RESOLVED rgb CSS color of a route edge for node-coloring. Resolves
+  // the var() expression to rgb via the DOM probe so that visually-equal colors (unknown & unbound,
+  // both grey) compare equal — a raw string comparison would treat them as different and misclassify
+  // the node. Returns null for non-route edges.
   private edgeRouteColor(
     canvas: Canvas,
     _edge: CanvasEdge,
@@ -657,7 +656,9 @@ export default class DialogueRouterCanvasExtension extends CanvasExtension {
     const sourceNode = data.fromNode ? canvas.nodes.get(data.fromNode) : undefined
     const sourceData = sourceNode?.getData() as CanvasNodeDataWithDialogue | undefined
     const sourceChoices = sourceData?.["x-dialogue"]?.frame?.choices ?? []
-    return routeToColorCss(route, sourceChoices)
+    const cssVar = routeToColorCss(route, sourceChoices)
+    // Resolve to concrete rgb so visually-equal colors compare equal (see method comment).
+    return resolveCssColor(cssVar)
   }
 
   private renderRouterNode(canvas: Canvas, node: CanvasNode) {
