@@ -1,4 +1,4 @@
-# VN Canvas — Agent Handoff (current state: `main`, includes `fixes/route-correctness` + `fixes/router-perf`)
+# VN Canvas — Agent Handoff (current state: `main`, includes `fixes/route-correctness` + `fixes/router-perf` + `fixes/router-edge-side-opposite`)
 
 ## What this plugin is
 
@@ -11,6 +11,7 @@ Branches:
 - `vn/edge-split-router` — edge-split feature (double-click route edge → insert router node), color propagation, selection fixes. **Merged into `main` via fast-forward.** Tag `checkpoint-working-state-pre-atomic-split` (`4ec6cdc`) preserved for rolling back the atomic-split change if #3 regresses.
 - `fixes/route-correctness` — route-type model (`choice`/`unbound`/`broken`/`unknown`), router-node coloring (validity model + transit color), dynamic edge-side routing on router nodes, halved router node size (28→14px), arrowhead hiding on router endpoints. **Merged into `main` via fast-forward.** See sections below.
 - `fixes/router-perf` — router recompute performance: replaced O(E) edge scans with the native adjacency index, and the O(N·E) full-sweep recompute with targeted recompute (only affected routers + downstream cascade). Behavior-preserving. **Merged into `main` via fast-forward.** See "Router recompute performance" below.
+- `fixes/router-edge-side-opposite` — edge-side rule changed to "input = opposite of output" (straight-through pass-through) + router collapse (double-click a 1-in/1-out router to stitch source→target, the inverse of split). **Merged into `main` via fast-forward.** See "Dynamic edge-side routing" (rule update) and "Router collapse" below.
 
 ## How to deploy & test
 
@@ -34,7 +35,7 @@ npm run deploy          # build + copy to vault
 
 - **Route edge**: an edge with `x-dialogue.route = {type:"choice", choiceId, outcome, choiceIndex}` in its DATA. Only route edges are colored, splittable, and participate in dialogue routing. **Route must be in edge data, NOT applied as a visual hack at render time** (that was tried and failed — edges looked colored but couldn't be split).
 - **Choice port drag**: pointerdown on `.dialogue-canvas-choice-swatch` / `.dialogue-canvas-choice-failure-port` → delegates to `sourceNode.onConnectionPointerdown(event, "right")` for a native floating-end drag. `pendingChoiceRoute` remembers the choice; `onEdgeCreatedFromChoicePort` binds it via `saveRoute`.
-- **Edge-split**: double-click a route edge → insert router node at click point, split edge into two route edges (source→router, router→target), both carrying the route binding.
+- **Edge-split**: double-click a route edge → insert router node at click point, split edge into two route edges (source→router, router→target), both carrying the route binding. **Inverse: double-click a 1-in/1-out router → collapse it** (remove router, stitch source→target).
 - **Color propagation**: edges dragged FROM a router are **never grey** — they become route edges via the router-as-color-transit logic. The outgoing route TYPE is resolved from the router's incoming set (see "Route-type model" below), then colored. Reactive: `edge-created`/`edge-removed`/`edge-changed` + `node-changed` → `scheduleRecomputeAllRouters` (rAF-coalesced full sweep over every router). See problem #2.
 
 ---
@@ -78,8 +79,9 @@ Router nodes (14px dots, `x-dialogue.router.type = "point"`) are colored to refl
 Route edges attached to **router** nodes don't use a fixed face — the face is computed geometrically at render time so the line always points toward its neighbor. Only router nodes get dynamic sides; frame/target sides stay as stored in edge data (frame choice-port anchoring must stay). Computed per render-pass and cached in `routerSideCache: WeakMap<Canvas, WeakMap<CanvasNode, Map<string, {fromSide, toSide}>>>` so every edge of one router agrees within a pass.
 
 **Algorithm** (`computeRouterEdgeSides`, in route-canvas extension): walks a router's edges once, classifies incoming/outgoing, assigns sides:
-- Each edge attaches to the face nearest its own neighbor (source for incoming, target for outgoing). `nearestSide(from, to)` picks the axis (horizontal/vertical) with the larger delta, then the direction along it; ties go horizontal.
-- This was the final settled rule after two regressions (see "Edge-side history" below).
+- **1 in + 1 out (the transit case):** the OUTPUT side = the face nearest the target; the INPUT side = the **opposite** face. This makes the line pass straight THROUGH the router (in on one face, out on the opposite) — dead straight when the neighbors are roughly opposite, a single predictable bend otherwise. `nearestSide(from, to)` picks the axis (horizontal/vertical) with the larger delta, then the direction along it; ties go horizontal.
+- **Otherwise (0/2+ on either side):** every edge (in or out) independently takes the face nearest its own neighbor. No opposite-of-output rule applies since there isn't a single output to mirror.
+- This is the settled rule after three iterations (see "Edge-side history" below).
 
 **Render integration** (`renderRouteEdge`): for a router source, `fromSide` comes from `resolveRouterEdgeSide(...)` instead of `edge.from.side`; for a router target, `toSide` likewise. Arrowheads (`edge.fromLineEnd`/`edge.toLineEnd`) are hidden on router endpoints — a router is a transit point and the native arrowhead is positioned off our computed anchor anyway.
 
@@ -88,7 +90,18 @@ Route edges attached to **router** nodes don't use a fixed face — the face is 
 **Edge-side history** (don't repeat these):
 - Axis-forcing (both edges onto one shared axis for 1-in/1-out): sent an edge to the wrong face when neighbors were on different axes → coils on roughly straight layouts.
 - U-turn flip (push output to opposite face when both neighbors shared a face): sent output AWAY from its target → loops on same-side layouts.
-- Final rule: plain "nearest face per edge" handles opposite-face (straight), perpendicular (smooth 90°), and same-face (short overlap on the shared face, reads fine for a 14px router) without special-casing.
+- Nearest-per-edge (each edge nearest its own neighbor): coiled when source and target landed on the same face (both piled onto one face).
+- **Final rule: input = opposite of output.** Deterministic straight-through pass-through — the output always points at its target (nearest), and the input always comes in on the opposite face. No edge ever points away from its neighbor.
+
+---
+
+## Router collapse — the inverse of split (`fixes/router-edge-side-opposite`)
+
+Double-clicking a **router node** that is a clean 1-in/1-out route transit removes it and stitches `source→target` directly — the inverse of edge-split (`onRouterNodeDoubleClick` in route-canvas extension). Both operations share one `advanced-canvas:double-click` handler: a router-node dispatch first, falling through to edge-split if the click wasn't on a router.
+
+**Conditions** (bails / falls through to edge-split if unmet): click landed on a `.canvas-node.dialogue-canvas-router-node`; canvas not readonly; the router has EXACTLY 1 incoming + 1 outgoing edge, BOTH route edges (a non-route/grey edge attached means it's not a clean transit). Anything else (0/2+ on either side, a default edge, non-router node) is a no-op.
+
+**Atomic collapse** (mirrors split's atomicity): the merged edge carries the OUTGOING route (what the target saw before collapse — preserves downstream color/semantics); the reactive cascade re-validates it against the new source after import. Order: `removeEdge` (both old edges) → `removeNode` (router) → `importData` (the single merged edge) → `pushHistory`. One stable→stable transition; the canvas never sees an edge referencing the about-to-be-deleted node.
 
 ---
 
@@ -225,7 +238,7 @@ Panning the canvas with the middle mouse button over an edge previously caused r
 
 19. **Cached `choiceIndex` must not mask a broken choice.** A choice route's cached `choiceIndex` is a color hint set at bind time. If the choice was later deleted from the source frame, the cache would still hold a valid index and the edge would render in the choice color, hiding the broken reference. Only use the cache when the fromNode is a router (no choices to validate against); when the fromNode is a frame with choices, validate the choiceId against the live choices and degrade to `broken` if absent.
 
-20. **Edge-side routing: don't over-engineer.** For router-node edge sides, "nearest face per edge" is the correct default. Two attempts to be smarter both regressed: forcing both edges of a 1-in/1-out router onto one shared axis sent an edge to the wrong face when neighbors were on different axes; flipping the output to the opposite face when neighbors shared a face sent the output away from its target. Only special-case a genuine collision you can actually observe, not a hypothetical one. (See "Edge-side history" in the dynamic edge-side section.)
+20. **Edge-side routing: the transit case wants "input = opposite of output", not "nearest per edge".** For a 1-in/1-out router, three rules were tried before settling: (a) forcing both edges onto one shared axis → wrong face when neighbors were on different axes; (b) flipping the output to the opposite face when both shared a face → sent output away from its target; (c) nearest-per-edge → coiled when both neighbors landed on the same face. The settled rule makes the OUTPUT always point at its target (nearest face) and the INPUT always come in on the opposite face — deterministic straight-through, no edge ever points away from its neighbor. The takeaway: for a transit point, decide one side from geometry and DERIVE the other as its opposite, rather than computing both independently. (See "Edge-side history" in the dynamic edge-side section.)
 
 21. **Obsidian Canvas keeps a native per-node edge index — use it, don't re-scan.** `canvas.edgeFrom.get(node)` / `canvas.edgeTo.get(node)` / `canvas.getEdgesForNode(node)` are O(1) lookups (declared in `src/@types/Canvas.d.ts`), kept consistent by `addEdge`/`removeEdge` before any event listener sees them. The route extension originally scanned `canvas.edges.values()` with a nodeId filter in ~12 places — O(E) each, O(N·E) when nested inside a per-router loop. Replacing those scans with the index turned O(N·E) passes into O(N·attached).
 
