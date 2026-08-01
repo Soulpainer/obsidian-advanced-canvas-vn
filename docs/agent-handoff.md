@@ -1,4 +1,4 @@
-# VN Canvas — Agent Handoff (current state: `main`, includes `fixes/route-correctness`)
+# VN Canvas — Agent Handoff (current state: `main`, includes `fixes/route-correctness` + `fixes/router-perf`)
 
 ## What this plugin is
 
@@ -10,6 +10,7 @@ Branches:
 - `vn/dialogue-fixes` — stable: TS fixes, rebrand, upstream cleanup, choice-anchor geometry, CPU fixes, drag-to-spawn, choice-port drag (delegates to native onConnectionPointerdown), occupied-port lock, spawn-cancel cleanup, sequential modal opening (choice → frame). Merged into `main`.
 - `vn/edge-split-router` — edge-split feature (double-click route edge → insert router node), color propagation, selection fixes. **Merged into `main` via fast-forward.** Tag `checkpoint-working-state-pre-atomic-split` (`4ec6cdc`) preserved for rolling back the atomic-split change if #3 regresses.
 - `fixes/route-correctness` — route-type model (`choice`/`unbound`/`broken`/`unknown`), router-node coloring (validity model + transit color), dynamic edge-side routing on router nodes, halved router node size (28→14px), arrowhead hiding on router endpoints. **Merged into `main` via fast-forward.** See sections below.
+- `fixes/router-perf` — router recompute performance: replaced O(E) edge scans with the native adjacency index, and the O(N·E) full-sweep recompute with targeted recompute (only affected routers + downstream cascade). Behavior-preserving. **Merged into `main` via fast-forward.** See "Router recompute performance" below.
 
 ## How to deploy & test
 
@@ -88,6 +89,20 @@ Route edges attached to **router** nodes don't use a fixed face — the face is 
 - Axis-forcing (both edges onto one shared axis for 1-in/1-out): sent an edge to the wrong face when neighbors were on different axes → coils on roughly straight layouts.
 - U-turn flip (push output to opposite face when both neighbors shared a face): sent output AWAY from its target → loops on same-side layouts.
 - Final rule: plain "nearest face per edge" handles opposite-face (straight), perpendicular (smooth 90°), and same-face (short overlap on the shared face, reads fine for a 14px router) without special-casing.
+
+---
+
+## Router recompute performance (`fixes/router-perf`)
+
+The reactive router-transit recoloring used to be O(N·E) on **every** edge event: `scheduleRecomputeAllRouters` walked every router (O(N)), and each router's `resolveOutgoingRoute` / `recomputeRouterOutgoing` scanned every edge on the canvas (O(E)). On a graph with 50 routers + 100 edges that's 10 000 iterations per edge-changed — and `edge-changed` fires on every render during a drag/pan. Two changes fixed it, both behavior-preserving:
+
+**1. Native adjacency index instead of O(E) scans.** Obsidian's Canvas already keeps per-node edge indexes: `canvas.edgeFrom.get(node)` (outgoing), `canvas.edgeTo.get(node)` (incoming), `canvas.getEdgesForNode(node)` (union) — all O(1). They're declared in `src/@types/Canvas.d.ts` and were used in exactly one place before. Replaced 5 hot scans: `resolveOutgoingRoute`, `recomputeRouterOutgoing`, `computeRouterEdgeSides`, `renderNodeRoutes`, and `resolveNodeColor`/`hasOutgoingEdge` (router ext). Helper: `edgesForNode(canvas, node, direction)` in both extensions (one null-safe point of access).
+
+**2. Targeted recompute instead of full sweep.** `onEdgeRouteAffected` now collects the edge's current `fromNode`+`toNode` as "affected", and the rAF pass (`runRecompute`) recomputes only those routers + their downstream cascade (the existing `visited`-set cascade still walks the graph). `node-changed` (frame choices edited) is targeted too: collect routers fed by that frame's outgoing edges via `edgeFrom`, instead of sweeping everything.
+
+**Retarget correctness** — the subtle part: `edge.setData` overwrites `fromNode`/`toNode` in the native call *before* firing `edge-changed`, so by event time `getData()` already reflects the NEW endpoint — the detached OLD endpoint (the router no longer connected) is invisible. To catch it, `lastEdgeEndpoints` (per-canvas Map<edgeId, {fromNode,toNode}>) remembers each edge's last-seen endpoints; `onEdgeRouteAffected` diffs current vs previous and adds any changed endpoint to the affected set. Cleaned up on `edge-removed`.
+
+**Kept:** rAF-coalescing (one pass per frame, regardless of how many events fired) — `edge-changed` is ambiguous (fires on geometry-only renders too, not just data changes), so coalescing to the next frame when state is settled is correct. `routesEqual` still makes the no-op case cheap. A full-sweep escape hatch (`scheduleRecomputeAllRouters`) is retained but off the hot paths.
 
 ---
 
@@ -210,6 +225,10 @@ Panning the canvas with the middle mouse button over an edge previously caused r
 
 20. **Edge-side routing: don't over-engineer.** For router-node edge sides, "nearest face per edge" is the correct default. Two attempts to be smarter both regressed: forcing both edges of a 1-in/1-out router onto one shared axis sent an edge to the wrong face when neighbors were on different axes; flipping the output to the opposite face when neighbors shared a face sent the output away from its target. Only special-case a genuine collision you can actually observe, not a hypothetical one. (See "Edge-side history" in the dynamic edge-side section.)
 
+21. **Obsidian Canvas keeps a native per-node edge index — use it, don't re-scan.** `canvas.edgeFrom.get(node)` / `canvas.edgeTo.get(node)` / `canvas.getEdgesForNode(node)` are O(1) lookups (declared in `src/@types/Canvas.d.ts`), kept consistent by `addEdge`/`removeEdge` before any event listener sees them. The route extension originally scanned `canvas.edges.values()` with a nodeId filter in ~12 places — O(E) each, O(N·E) when nested inside a per-router loop. Replacing those scans with the index turned O(N·E) passes into O(N·attached).
+
+22. **When an event reflects a mutation, the PREVIOUS state is already gone.** `edge.setData` overwrites `fromNode`/`toNode` in the native call *before* firing `edge-changed`, so a listener can't see the old endpoint — only the new one. If you need to react to what was *detached* (e.g. a router that lost its incoming edge when the line was retargeted), you must remember the previous value yourself (per-id `lastEdgeEndpoints` map) and diff against the current one. Don't assume the event payload preserves the pre-mutation state.
+
 ---
 
 ## PENDING / DEFERRED TASKS
@@ -217,7 +236,6 @@ Panning the canvas with the middle mouse button over an edge previously caused r
 Items acknowledged but not yet done. Ordered roughly by priority.
 
 - **Validation command**: collect all `broken` / `unknown` route edges across the canvas and surface them as a list/modal, so the author can find every dangling route. Currently broken/unknown are only visible by their red/grey dashed lines on the canvas.
-- **Performance: `scheduleRecomputeAllRouters` is a full sweep.** Every `edge-changed` triggers a rAF-coalesced recompute of EVERY router (mitigated by `routesEqual` making the no-op case cheap). On large graphs this may need to become targeted (only the edge's `fromNode`/`toNode` + downstream). Separate exploration needed.
 - **`enforceSingleOutgoingEdge` history / determinism**: the spawn-edge-disappeared bug was fixed by capturing + removing the native drag edge, but the broader non-determinism in how Obsidian fires `edge-created` during a floating drag deserves a closer look.
 - **Self-loop on a router node (#6)**: a route edge whose both endpoints are the same router. Currently unhandled; likely renders as a degenerate path. Low priority until it shows up in real use.
 - **Dead `"failure"` route type**: `DialogueRouteType` still includes `"failure"` for migration safety, but it's effectively `choice` + `outcome:"failure"`. Audit whether any persisted data still uses bare `type:"failure"`; if not, remove from the union.
