@@ -1,14 +1,14 @@
-# VN Canvas — Agent Handoff (current state: branch `vn/edge-split-router`)
+# VN Canvas — Agent Handoff (current state: `main`)
 
 ## What this plugin is
 
 A fork of obsidian-advanced-canvas, stripped to a **visual-novel dialogue graph editor**. Plugin id `vn-canvas`, deployed to `<vault>/.obsidian/plugins/vn-canvas/` via `npm run deploy`. Canvas nodes = dialogue frames, edges = routes. Data in `.canvas` files + `Dialogue/*.md` tables (Characters/Stats/Properties/Triggers), read by a Unity runtime.
 
 Branches:
-- `main` — upstream Advanced Canvas.
+- `main` (CURRENT) — the VN fork, fully merged. All 5 problems below SOLVED and user-confirmed. Note: `main` is no longer the upstream Advanced Canvas — it's the VN fork trunk.
 - `new-logic` — VN fork base.
-- `vn/dialogue-fixes` — stable: TS fixes, rebrand, upstream cleanup, choice-anchor geometry, CPU fixes, drag-to-spawn, choice-port drag (delegates to native onConnectionPointerdown), occupied-port lock, spawn-cancel cleanup, sequential modal opening (choice → frame).
-- `vn/edge-split-router` (CURRENT) — edge-split feature (double-click route edge → insert router node), color propagation, selection fixes. **ALL PROBLEMS SOLVED: #1 (post-split Delete), #2 (router as color transit), #3 (render-break, preventatively atomic), #4 (occupied ports), #5 (pan-over-edge lag). Ready to merge to main (fast-forward, 0 conflicts).**
+- `vn/dialogue-fixes` — stable: TS fixes, rebrand, upstream cleanup, choice-anchor geometry, CPU fixes, drag-to-spawn, choice-port drag (delegates to native onConnectionPointerdown), occupied-port lock, spawn-cancel cleanup, sequential modal opening (choice → frame). Merged into `main`.
+- `vn/edge-split-router` — edge-split feature (double-click route edge → insert router node), color propagation, selection fixes. **Merged into `main` via fast-forward.** Tag `checkpoint-working-state-pre-atomic-split` (`4ec6cdc`) preserved for rolling back the atomic-split change if #3 regresses.
 
 ## How to deploy & test
 
@@ -31,11 +31,11 @@ npm run deploy          # build + copy to vault
 - **Route edge**: an edge with `x-dialogue.route = {type:"choice", choiceId, outcome, choiceIndex}` in its DATA. Only route edges are colored, splittable, and participate in dialogue routing. **Route must be in edge data, NOT applied as a visual hack at render time** (that was tried and failed — edges looked colored but couldn't be split).
 - **Choice port drag**: pointerdown on `.dialogue-canvas-choice-swatch` / `.dialogue-canvas-choice-failure-port` → delegates to `sourceNode.onConnectionPointerdown(event, "right")` for a native floating-end drag. `pendingChoiceRoute` remembers the choice; `onEdgeCreatedFromChoicePort` binds it via `saveRoute`.
 - **Edge-split**: double-click a route edge → insert router node at click point, split edge into two route edges (source→router, router→target), both carrying the route binding.
-- **Color propagation**: edges dragged FROM a router should inherit the route from an incoming route edge. Implemented in `onEdgeCreatedFromChoicePort` via `findInheritedRoute` → `saveRoute`.
+- **Color propagation**: edges dragged FROM a router are **never grey** — they become route edges via the router-as-color-transit logic. Outgoing route = the router's single incoming choice route (inherited color), else `unbound` (neutral white). Reactive: `edge-created`/`edge-removed`/`edge-changed` → `scheduleRecomputeAllRouters` (rAF-coalesced full sweep). See problem #2.
 
 ---
 
-## UNSOLVED PROBLEMS (on branch `vn/edge-split-router`)
+## SOLVED PROBLEMS (all user-confirmed, merged to `main`)
 
 ### 1. Router-node selection doesn't work (Delete broken) — SOLVED ✅
 
