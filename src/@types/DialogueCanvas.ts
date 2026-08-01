@@ -183,7 +183,7 @@ export interface DialogueAnswerEditorValue extends DialogueAnswerData {
   text: string
 }
 
-export type DialogueRouteType = "failure" | "choice" | "unbound"
+export type DialogueRouteType = "failure" | "choice" | "unbound" | "broken" | "unknown"
 export type DialogueChoiceRouteOutcome = "success" | "failure"
 
 export interface DialogueFailureRouteData {
@@ -204,6 +204,21 @@ export interface DialogueFailureRouteData {
 // in every way except color/choice binding.
 export interface DialogueUnboundRouteData {
   type: "unbound"
+}
+
+// LLM agent change: a "broken" route edge — a router's incoming choice reference is invalid (the
+// choice was deleted from the source frame, or all incoming routes are themselves broken). Renders
+// as a red dashed line so the broken reference is visible. Distinct from "unbound" (ambiguous but
+// valid) and "unknown" (no incoming source at all).
+export interface DialogueBrokenRouteData {
+  type: "broken"
+}
+
+// LLM agent change: an "unknown" route edge — a router has NO incoming route edges, so the outgoing
+// edge has no source to inherit. Renders as a grey dashed line (the "no source connected" state),
+// distinct from "unbound"'s solid grey (ambiguous-but-valid).
+export interface DialogueUnknownRouteData {
+  type: "unknown"
 }
 
 export interface DialogueRouteData {

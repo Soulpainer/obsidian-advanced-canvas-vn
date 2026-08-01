@@ -11,9 +11,11 @@ import {
   DialogueChoiceData,
   DialogueChoiceRouteOutcome,
   DialogueEdgeData,
+  DialogueBrokenRouteData,
   DialogueFailureRouteData,
   DialogueNodeData,
   DialogueUnboundRouteData,
+  DialogueUnknownRouteData,
 } from "src/@types/DialogueCanvas"
 import CanvasHelper from "src/utils/canvas-helper"
 import CanvasExtension from "./canvas-extension"
@@ -45,9 +47,13 @@ type DialogueChoiceRouteData = DialogueFailureRouteData & {
   outcome: DialogueChoiceRouteOutcome
 }
 
-// LLM agent change: any route (choice OR unbound). Used where we care "is this a route edge at all"
-// regardless of whether it's bound to a specific choice.
-type DialogueRouteData = DialogueChoiceRouteData | DialogueUnboundRouteData
+// LLM agent change: any route (choice, unbound, broken, OR unknown). Used where we care "is this a
+// route edge at all" regardless of whether it's bound to a specific choice or in a valid state.
+type DialogueRouteData =
+  | DialogueChoiceRouteData
+  | DialogueUnboundRouteData
+  | DialogueBrokenRouteData
+  | DialogueUnknownRouteData
 
 class EditDialogueChoiceRouteModal extends Modal {
   private choiceId: string
@@ -241,7 +247,16 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
         this.onEdgeDoubleClick(canvas, event, preventDefault)
     ))
     const rerender = (canvas: Canvas) => this.scheduleRenderCanvas(canvas)
-    this.plugin.registerEvent(this.plugin.app.workspace.on("advanced-canvas:node-changed", rerender))
+    // LLM agent change: recompute router-transit colors when a node changes. A frame's choices can
+    // change (choice added/deleted/renamed) via the frame editor without touching any edge — so
+    // edge-changed never fires and the cascade would otherwise NOT re-evaluate validity. This is
+    // the fix for "deleting a choice left the inherited line colored" — the router's outgoing edge
+    // must now become BROKEN (choiceId gone) or UNKNOWN (all choices gone), reactively.
+    const recompute = (canvas: Canvas) => this.scheduleRecomputeAllRouters(canvas)
+    this.plugin.registerEvent(this.plugin.app.workspace.on("advanced-canvas:node-changed", (canvas: Canvas) => {
+      rerender(canvas)
+      recompute(canvas)
+    }))
     this.plugin.registerEvent(this.plugin.app.workspace.on(
       "advanced-canvas:node-moved",
       (canvas: Canvas, node: CanvasNode) => this.renderNodeRoutes(canvas, node)
@@ -927,15 +942,12 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
     const targetNodeId = edgeData.toNode!
 
     // LLM agent change: build the route payload carried by BOTH split halves — identical to the
-    // original route (choice stays choice with its binding, unbound stays unbound). For choice
-    // routes we also resolve/refresh choiceIndex so the color is preserved across the split.
+    // original route. Choice stays choice (with refreshed choiceIndex so the color survives the
+    // split); unbound/broken/unknown are carried through unchanged (no color id — renderRouteEdge
+    // paints them via CSS var / dash pattern).
     let splitRoute: DialogueRouteData
     let colorId: `${number}` | undefined
-    if (route.type === "unbound") {
-      splitRoute = { type: "unbound" }
-      // Unbound edges don't carry a palette color id; renderRouteEdge paints them via CSS var.
-      colorId = undefined
-    } else {
+    if (route.type === "choice") {
       const choiceIndex = route.choiceIndex !== undefined
         ? route.choiceIndex
         : Math.max(this.getChoiceIndex(canvas, sourceNodeId, route.choiceId!), 0)
@@ -946,6 +958,10 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
         choiceIndex,
       }
       colorId = this.getRouteCanvasColorId(choiceIndex)
+    } else {
+      // unbound / broken / unknown — carry through as-is, no palette color id.
+      splitRoute = { type: route.type } as DialogueRouteData
+      colorId = undefined
     }
 
     // LLM agent change: generate the router node id UPFRONT and add the node via importData (not
@@ -1067,14 +1083,23 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
     const sourceNodeData = sourceNode.getData() as CanvasNodeDataWithDialogue
     const choices = sourceNodeData["x-dialogue"]?.frame?.choices ?? []
 
-    // LLM agent change: resolve the visual color for this edge. Choice routes compute an index from
-    // the source's choices (falling back to a cached choiceIndex when the source is a router);
-    // unbound routes have a single neutral color regardless of source.
+    // LLM agent change: resolve the visual color + dash for this edge by route type:
+    //   choice (resolvable) → palette color, solid (failure → short-dashed)
+    //   choice (unresolvable)/unbound → solid grey
+    //   unknown             → grey dashed-unknown (no incoming source)
+    //   broken              → red dashed-broken (choice reference lost)
     let colorCss: string
-    let isFailure = false
-    if (route.type === "unbound") {
+    let dashPath: string | null = null
+    if (route.type === "unknown") {
+      colorCss = "var(--dialogue-route-unknown-color)"
+      dashPath = "dashed-unknown"
+    } else if (route.type === "broken") {
+      colorCss = "var(--dialogue-route-broken-color)"
+      dashPath = "dashed-broken"
+    } else if (route.type === "unbound") {
       colorCss = this.getRouteColorCss(-1, "success")
     } else {
+      // choice
       let choiceIndex = choices.findIndex(choice => choice.choiceId === route.choiceId)
       // LLM agent change: if fromNode is a router (no choices), fall back to the cached choiceIndex
       // stored in the route data by saveRoute. This keeps the color correct for split edges.
@@ -1086,7 +1111,9 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
         colorCss = this.getRouteColorCss(-1, "success")
       } else {
         colorCss = this.getRouteColorCss(choiceIndex, route.outcome)
-        isFailure = route.outcome === "failure"
+        if (route.outcome === "failure") {
+          dashPath = "short-dashed"
+        }
       }
     }
 
@@ -1094,9 +1121,9 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
     const isRouterSource = choices.length === 0
 
     // LLM agent change: anchor choice — frame source anchors to the choice port, router source
-    // anchors to its bbox edge center (routers have no choice ports). Unbound routes always use
+    // anchors to its bbox edge center (routers have no choice ports). Non-choice routes always use
     // the bbox-center anchor (they have no choice port by definition).
-    const anchor = (isRouterSource || route.type === "unbound")
+    const anchor = (isRouterSource || route.type !== "choice")
       ? this.getRouterAnchor(sourceNode, edge.from.side)
       : this.getChoiceAnchor(canvas, sourceNode, route.choiceId!, route.outcome!)
     const target = this.getEdgeTargetAnchor(canvas, edge, edgeData)
@@ -1109,9 +1136,10 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
     edge.path.interaction.setAttr("d", path)
     edge.path.display.setAttr("d", path)
 
-    if (isFailure) {
-      edge.path.display.setAttr("data-path", "short-dashed")
-      edge.path.interaction.setAttr("data-path", "short-dashed")
+    // LLM agent change: apply the dash pattern (short-dashed / dashed-unknown / dashed-broken / none).
+    if (dashPath) {
+      edge.path.display.setAttr("data-path", dashPath)
+      edge.path.interaction.setAttr("data-path", dashPath)
     } else {
       edge.path.display.removeAttribute("data-path")
       edge.path.interaction.removeAttribute("data-path")
@@ -1123,15 +1151,25 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
   }
 
   // LLM agent change: resolve the route that a router's OUTGOING edge should carry, based on the
-  // router's incoming route edges. Rules (counting only route edges — choice + unbound; default
-  // grey edges are ignored):
-  //   - exactly 1 incoming CHOICE route → inherit it (same choiceId/outcome/choiceIndex → color)
-  //   - exactly 1 incoming UNBOUND route, or 0, or 2+, or mixed → UNBOUND (neutral white line)
-  // This is the heart of the "router as a color transit" feature: an outgoing line is never grey,
-  // and it only carries a choice's color when that choice is unambiguous.
+  // router's incoming route edges. Classifies each incoming edge, then applies the rules:
+  //   - 0 incoming route edges                    → UNKNOWN  (no source connected — grey dashed)
+  //   - ALL incoming edges are broken             → BROKEN   (red dashed)
+  //   - has non-broken edges (broken ones ignored):
+  //       exactly 1 valid CHOICE                  → CHOICE   (inherit its color)
+  //       else (multiple choices / unbound / unknown present) → UNBOUND (solid grey)
+  //
+  // "Broken" classification of an incoming edge:
+  //   - type "broken" already                                  → broken
+  //   - type "choice" AND its fromNode is a frame AND its choiceId is NOT in that frame's choices
+  //                                                              → broken (live validity check)
+  //   - type "choice" from a router (no choices to check)       → trusted as valid (the upstream
+  //     router's own cascade already re-typed it broken if its source was invalid)
+  // This is the heart of the router-as-color-transit feature.
   private resolveOutgoingRoute(canvas: Canvas, routerId: string): DialogueRouteData {
-    let choiceCount = 0
-    let lastChoice: DialogueChoiceRouteData | null = null
+    let hasAny = false
+    let allBroken = true
+    let validChoiceCount = 0
+    let lastValidChoice: DialogueChoiceRouteData | null = null
 
     for (const edge of canvas.edges.values()) {
       const data = edge.getData() as CanvasEdgeDataWithDialogue
@@ -1142,17 +1180,43 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
       if (!route) {
         continue
       }
-      if (route.type === "choice") {
-        choiceCount++
-        lastChoice = route
-      } else {
-        // incoming unbound → immediately unbound (mixed/unambiguous-unbound both → unbound)
-        return { type: "unbound" }
+      hasAny = true
+
+      // Classify this incoming edge.
+      if (route.type === "broken") {
+        // already broken — counts toward allBroken but is otherwise ignored
+        continue
       }
+      if (route.type === "choice") {
+        // Live validity check: if the edge's fromNode is a frame and the choiceId isn't in its
+        // choices, this reference is broken.
+        if (data.fromNode) {
+          const fromNode = canvas.nodes.get(data.fromNode)
+          const fromData = fromNode?.getData() as CanvasNodeDataWithDialogue | undefined
+          const choices = fromData?.["x-dialogue"]?.frame?.choices
+          if (choices && !choices.some(choice => choice.choiceId === route.choiceId)) {
+            // fromNode is a frame but choiceId is gone → broken
+            continue
+          }
+        }
+        // valid choice
+        allBroken = false
+        validChoiceCount++
+        lastValidChoice = route
+        continue
+      }
+      // type unbound or unknown — valid but carries no choice color
+      allBroken = false
     }
 
-    if (choiceCount === 1 && lastChoice) {
-      return { ...lastChoice }
+    if (!hasAny) {
+      return { type: "unknown" }
+    }
+    if (allBroken) {
+      return { type: "broken" }
+    }
+    if (validChoiceCount === 1 && lastValidChoice) {
+      return { ...lastValidChoice }
     }
     return { type: "unbound" }
   }
@@ -1230,6 +1294,9 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
 
   // LLM agent change: structural equality for routes — used by applyOutgoingRoute to skip no-op
   // updates (which would otherwise loop the cascade: setData → edge-changed → recompute → setData).
+  // For non-choice types (unbound/broken/unknown) equality is just "same type" — they carry no
+  // other fields. Choice routes additionally compare choiceId + outcome (NOT choiceIndex — it's a
+  // cached color value, intentionally excluded so it can be normalized without looping).
   private routesEqual(a: DialogueRouteData, b: DialogueRouteData): boolean {
     if (a.type !== b.type) {
       return false
@@ -1237,7 +1304,7 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
     if (a.type === "choice" && b.type === "choice") {
       return a.choiceId === b.choiceId && a.outcome === b.outcome
     }
-    // both unbound
+    // both unbound / broken / unknown — same type is enough
     return true
   }
 
@@ -1495,12 +1562,13 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
     return route as DialogueChoiceRouteData
   }
 
-  // LLM agent change: any route (choice OR unbound). Returns the route object if this edge is a
-  // route edge of any kind — used to decide "is this a route line at all" regardless of choice
-  // binding. Unbound routes (type "unbound") are routes too, just not bound to a specific choice.
+  // LLM agent change: any route (choice, unbound, broken, OR unknown). Returns the route object if
+  // this edge is a route edge of any kind — used to decide "is this a route line at all" regardless
+  // of choice binding. Broken/unknown routes are routes too (valid edge slots awaiting a valid
+  // source/binding) — they just render differently.
   private getRoute(route: DialogueFailureRouteData | undefined): DialogueRouteData | undefined {
-    if (route?.type === "unbound") {
-      return route as DialogueUnboundRouteData
+    if (route?.type === "unbound" || route?.type === "broken" || route?.type === "unknown") {
+      return route as DialogueUnboundRouteData | DialogueBrokenRouteData | DialogueUnknownRouteData
     }
     return this.getChoiceRoute(route)
   }

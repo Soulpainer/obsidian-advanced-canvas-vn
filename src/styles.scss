@@ -28,9 +28,30 @@
 // backgrounds (pure #fff would vanish on a light theme). Grey-ish: distinct from any choice color.
 .theme-light {
   --dialogue-route-unbound-color: #6b7280;
+  // LLM agent change: broken route — a router's incoming choice reference is invalid (choice
+  // deleted / all incoming broken). Red, themed for visibility.
+  --dialogue-route-broken-color: #dc2626;
+  // LLM agent change: unknown route — a router has no incoming routes. Reuses the unbound grey.
+  --dialogue-route-unknown-color: #6b7280;
 }
 .theme-dark {
   --dialogue-route-unbound-color: #d1d5db;
+  --dialogue-route-broken-color: #f87171;
+  --dialogue-route-unknown-color: #d1d5db;
+}
+
+// LLM agent change: dashed patterns for the broken/unknown route states. Obsidian's native edges
+// are SVG paths; we set data-path on them and apply a stroke-dasharray here. short-dashed (failure)
+// is a native Obsidian pattern; these two are our own.
+.canvas-wrapper {
+  // broken: red dashed — choice reference lost
+  .canvas-edge-path[data-path="dashed-broken"] {
+    stroke-dasharray: 6 4;
+  }
+  // unknown: grey dashed — no incoming source
+  .canvas-edge-path[data-path="dashed-unknown"] {
+    stroke-dasharray: 2 4;
+  }
 }
 
 .canvas-node.dialogue-canvas-frame-node {
