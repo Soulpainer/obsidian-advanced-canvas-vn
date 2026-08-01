@@ -1256,8 +1256,10 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
 
       // Classify this incoming edge.
       if (route.type === "broken") {
-        // already broken — counts toward allBroken but is otherwise ignored. Doesn't clear
-        // onlyUnknown (a mix of broken + unknown still has no valid source).
+        // already broken — counts toward allBroken. It's NOT unknown (broken has a specific reason:
+        // a deleted choice), so it must clear onlyUnknown — otherwise a single broken input would be
+        // misrouted to the unknown branch below and the broken state wouldn't propagate downstream.
+        onlyUnknown = false
         continue
       }
       if (route.type === "unknown") {

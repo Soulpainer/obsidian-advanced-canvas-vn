@@ -644,10 +644,10 @@ export default class DialogueRouterCanvasExtension extends CanvasExtension {
   }
 
   // LLM agent change: compute the RESOLVED rgb CSS color of a route edge, for VALID routes only.
-  // "Valid" = choice (resolvable) OR unbound — both are real, working route lines. unbound just
-  // means "not bound to a specific choice" but the route IS connected and correct.
-  // broken (choice deleted) and unknown (no source) are PROBLEM states → return null, so they
-  // don't count toward validity and a router fed only by them paints grey (warning).
+  // "Valid" for node coloring = choice (resolvable), unbound, OR broken — all three carry a concrete
+  // color and a broken input should make the node red (matching its broken line). Only unknown is a
+  // non-endpoint (no source upstream → the router has no colored route flowing through it → grey
+  // warning). So this returns a color for choice/unbound/broken, null for unknown (and default edges).
   private edgeRouteColor(
     canvas: Canvas,
     _edge: CanvasEdge,
@@ -658,12 +658,12 @@ export default class DialogueRouterCanvasExtension extends CanvasExtension {
     if (!route) {
       return null // default edge — not a route
     }
-    // broken / unknown are problem states, not valid endpoints.
-    if (route.type === "broken" || route.type === "unknown") {
+    // unknown = no source upstream → not a colored endpoint. (broken IS colored — red.)
+    if (route.type === "unknown") {
       return null
     }
-    // choice OR unbound — both valid. Resolve the source frame's choices for a choice route (to
-    // validate it / compute its palette index); for unbound, there's nothing to resolve.
+    // choice / unbound / broken — all carry a concrete color. Resolve the source frame's choices for
+    // a choice route (validate + palette index); for unbound/broken, routeToColorCss maps directly.
     const sourceNode = data.fromNode ? canvas.nodes.get(data.fromNode) : undefined
     const sourceData = sourceNode?.getData() as CanvasNodeDataWithDialogue | undefined
     const sourceChoices = sourceData?.["x-dialogue"]?.frame?.choices ?? []
