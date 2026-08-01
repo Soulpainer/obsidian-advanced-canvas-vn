@@ -760,31 +760,37 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
   // LLM agent change: bind a newly-created edge to the pending choice route (if any), instead of
   // leaving it as a plain edge that would later open the choice-binding modal.
   private onEdgeCreatedFromChoicePort(canvas: Canvas, edge: CanvasEdge) {
-    const pending = this.pendingChoiceRoute
-    if (!pending) {
-      return
-    }
-
     const edgeData = edge.getData() as CanvasEdgeDataWithDialogue
-    if (edgeData.fromNode !== pending.sourceNodeId) {
-      // Not the edge from our drag (e.g. an unrelated edge was created) — leave the pending intact
-      // in case ours arrives next.
+
+    // LLM agent change: if the edge came from a choice-port drag (pending set), bind that route.
+    const pending = this.pendingChoiceRoute
+    if (pending && edgeData.fromNode === pending.sourceNodeId) {
+      this.choiceDragNativeEdge = edge
+      const sourceNode = canvas.nodes.get(pending.sourceNodeId)
+      if (sourceNode) {
+        const route: DialogueChoiceRouteData = {
+          type: "choice",
+          choiceId: pending.choiceId,
+          outcome: pending.outcome,
+        }
+        this.saveRoute(canvas, edge, sourceNode, route)
+      }
       return
     }
 
-    // LLM agent change: bind the route to this native dragged edge (drop on target case). Do NOT
-    // consume pendingChoiceRoute — keep it alive so the spawn flow (drop on empty) can also use it.
-    // If a spawn happens, onEdgeNeedsRoute will remove this native edge and bind the spawn edge.
-    this.choiceDragNativeEdge = edge
-
-    const sourceNode = canvas.nodes.get(pending.sourceNodeId)
-    if (sourceNode) {
-      const route: DialogueChoiceRouteData = {
-        type: "choice",
-        choiceId: pending.choiceId,
-        outcome: pending.outcome,
+    // LLM agent change: if there's no pending choice, but the edge's fromNode is a router, inherit
+    // the route from an incoming route edge to that router. This makes edges dragged FROM a router
+    // colored and splittable — they carry the same route as the incoming edge. If no incoming
+    // route exists, the edge stays a plain grey connection.
+    if (!pending && edgeData.fromNode) {
+      const fromNode = canvas.nodes.get(edgeData.fromNode)
+      const fromData = fromNode?.getData() as CanvasNodeDataWithDialogue | undefined
+      if (fromData?.["x-dialogue"]?.router) {
+        const inherited = this.findInheritedRoute(canvas, edgeData.fromNode)
+        if (inherited && fromNode) {
+          this.saveRoute(canvas, edge, fromNode, inherited)
+        }
       }
-      this.saveRoute(canvas, edge, sourceNode, route)
     }
   }
 
@@ -852,27 +858,34 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
       : Math.max(this.getChoiceIndex(canvas, sourceNodeId, route.choiceId!), 0)
     const colorId = this.getRouteCanvasColorId(choiceIndex)
 
-    // Generate a router node id upfront (don't create the node via canvas.createTextNode — we'll
-    // add it through importData together with the edges so there's no intermediate state).
-    const routerId = `split-router-${Date.now()}`
+    // LLM agent change: create the router node via createTextNode (not importData) so it's a
+    // fully-managed CanvasNode that selectOnly/Delete works on. We add x-dialogue data right after.
+    const routerNode = canvas.createTextNode({
+      pos: {
+        x: clickPos.x - routerSize / 2,
+        y: clickPos.y - routerSize / 2,
+      },
+      size: { width: routerSize, height: routerSize },
+    })
+    const routerNodeData = routerNode.getData() as CanvasNodeDataWithDialogue
+    const routerNextData: CanvasNodeDataWithDialogue = {
+      ...routerNodeData,
+      text: "",
+      width: routerSize,
+      height: routerSize,
+      "x-dialogue": {
+        ...routerNodeData["x-dialogue"],
+        router: { type: "point" },
+      },
+    }
+    routerNode.setData(routerNextData)
+
+    const routerId = routerNode.getData().id
     const stamp = Date.now()
 
-    // Build the full import payload: router node + two edges.
+    // Build the two edges (node already exists via createTextNode).
     const importPayload = {
-      nodes: [
-        {
-          id: routerId,
-          type: "text" as const,
-          text: "",
-          x: clickPos.x - routerSize / 2,
-          y: clickPos.y - routerSize / 2,
-          width: routerSize,
-          height: routerSize,
-          ["x-dialogue"]: {
-            router: { type: "point" },
-          },
-        },
-      ],
+      nodes: [],
       edges: [
         // edge-1: source → router
         {
@@ -901,22 +914,15 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
       ],
     }
 
-    // Remove the old edge first, then import router + two edges in one shot.
+    // Remove the old edge, then import the two new edges.
     canvas.removeEdge(clickedEdge)
     canvas.importData(importPayload, false, false)
     canvas.pushHistory(canvas.getData())
     this.scheduleRenderCanvas(canvas)
 
-    // LLM agent change: select the router node after importData and the scheduled render settle.
-    // Deferred to the next animation frame because importData + scheduleRenderCanvas trigger
-    // synchronous Obsidian re-renders that can clear canvas.selection.
-    window.requestAnimationFrame(() => {
-      const liveCanvas = this.plugin.getCurrentCanvas()
-      const liveRouter = liveCanvas?.nodes.get(routerId)
-      if (liveCanvas && liveRouter) {
-        liveCanvas.selectOnly(liveRouter)
-      }
-    })
+    // LLM agent change: select the router node. It was created via createTextNode (a fully managed
+    // node), so selectOnly works and Delete is functional.
+    canvas.selectOnly(routerNode)
   }
 
   // LLM agent change: get the index of a choice by id in the source node's choices.
@@ -932,25 +938,9 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
 
   private renderRouteEdge(canvas: Canvas, edge: CanvasEdge) {
     const edgeData = edge.getData() as CanvasEdgeDataWithDialogue
-    let route = this.getChoiceRoute(edgeData["x-dialogue"]?.route)
+    const route = this.getChoiceRoute(edgeData["x-dialogue"]?.route)
 
-    // LLM agent change: color propagation for router nodes. If this edge has no route but its
-    // fromNode is a router, inherit the route binding from an incoming route edge to that router.
-    // This makes outgoing edges from a split router colored, splittable, and consistent with the
-    // incoming route. If multiple incoming routes exist, take the first found.
-    if (!route && edgeData.fromNode) {
-      const fromNode = canvas.nodes.get(edgeData.fromNode)
-      const fromData = fromNode?.getData() as CanvasNodeDataWithDialogue | undefined
-      if (fromData?.["x-dialogue"]?.router) {
-        const inherited = this.findInheritedRoute(canvas, edgeData.fromNode)
-        if (inherited) {
-          route = inherited
-        }
-      }
-    }
-
-    const resolvedRoute = route
-    if (!resolvedRoute || !edge.bezier || !edgeData.fromNode) {
+    if (!route || !edge.bezier || !edgeData.fromNode) {
       return
     }
 
@@ -959,12 +949,12 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
     const sourceNode = canvas.nodes.get(edgeData.fromNode)
     const sourceNodeData = sourceNode?.getData() as CanvasNodeDataWithDialogue | undefined
     const choices = sourceNodeData?.["x-dialogue"]?.frame?.choices ?? []
-    let choiceIndex = choices.findIndex(choice => choice.choiceId === resolvedRoute.choiceId)
+    let choiceIndex = choices.findIndex(choice => choice.choiceId === route.choiceId)
 
     // LLM agent change: if fromNode is a router (no choices), fall back to the cached choiceIndex
     // stored in the route data by saveRoute. This keeps the color correct for split edges.
-    if (choiceIndex < 0 && resolvedRoute.choiceIndex !== undefined) {
-      choiceIndex = resolvedRoute.choiceIndex
+    if (choiceIndex < 0 && route.choiceIndex !== undefined) {
+      choiceIndex = route.choiceIndex
     }
 
     // For router-source nodes, use the bbox center as anchor (no choice port to anchor to).
@@ -978,7 +968,7 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
     // anchors to its bbox edge center (routers have no choice ports).
     const anchor = isRouterSource
       ? this.getRouterAnchor(sourceNode, edge.from.side)
-      : this.getChoiceAnchor(canvas, sourceNode, resolvedRoute.choiceId!, resolvedRoute.outcome!)
+      : this.getChoiceAnchor(canvas, sourceNode, route.choiceId!, route.outcome!)
     const target = this.getEdgeTargetAnchor(canvas, edge, edgeData)
     const path = this.buildBezierPath(anchor, target, edge.from.side, edge.to.side)
 
@@ -989,7 +979,7 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
     edge.path.interaction.setAttr("d", path)
     edge.path.display.setAttr("d", path)
 
-    if (resolvedRoute.outcome === "failure") {
+    if (route.outcome === "failure") {
       edge.path.display.setAttr("data-path", "short-dashed")
       edge.path.interaction.setAttr("data-path", "short-dashed")
     } else {
@@ -997,14 +987,14 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
       edge.path.interaction.removeAttribute("data-path")
     }
 
-    this.applyEdgeColor(edge, this.getRouteColorCss(choiceIndex, resolvedRoute.outcome))
+    this.applyEdgeColor(edge, this.getRouteColorCss(choiceIndex, route.outcome))
     // LLM agent change: do not re-render the native label from our route renderer; it can recursively trigger edge renders.
     this.setEdgeLabelVisible(edge, false)
   }
 
   // LLM agent change: find a route binding to inherit for a router's outgoing edge. Looks at all
-  // edges whose toNode is the router and returns the first route found. Used for color
-  // propagation — outgoing edges from a split router take the color of an incoming route edge.
+  // edges whose toNode is the router and returns the first route found. Used so edges dragged
+  // from a router inherit the route (and thus color/splittability) of an incoming route edge.
   private findInheritedRoute(canvas: Canvas, routerId: string): DialogueChoiceRouteData | null {
     for (const edge of canvas.edges.values()) {
       const data = edge.getData() as CanvasEdgeDataWithDialogue
