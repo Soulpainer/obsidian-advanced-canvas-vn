@@ -266,7 +266,17 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
     }))
     this.plugin.registerEvent(this.plugin.app.workspace.on(
       "advanced-canvas:node-moved",
-      (canvas: Canvas, node: CanvasNode) => this.renderNodeRoutes(canvas, node)
+      (canvas: Canvas, node: CanvasNode, usingKeyboard: boolean) => {
+        this.renderNodeRoutes(canvas, node)
+        // LLM agent change: a node move changes the geometry that router edge-side assignment
+        // depends on (nearest face / opposite-of-output), even for neighboring routers that didn't
+        // move. Recompute via a full renderCanvas — BUT ONLY on drag release (usingKeyboard === true
+        // means the drag ended, or a keyboard nudge). Doing it on every move event was unusably slow
+        // (full re-render per mousemove) and broke node colors; release-only is instant and cheap.
+        if (usingKeyboard) {
+          this.scheduleRenderCanvas(canvas)
+        }
+      }
     ))
     this.plugin.registerEvent(this.plugin.app.workspace.on(
       "advanced-canvas:node-resized",
