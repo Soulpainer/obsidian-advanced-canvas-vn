@@ -25,7 +25,8 @@ type CanvasEdgeDataWithNodes = ReturnType<CanvasEdge["getData"]> & {
 }
 
 export default class DialogueRouterCanvasExtension extends CanvasExtension {
-  private readonly routerSize = 28
+  // LLM agent change: router node size, halved from 28 to 14 per user request.
+  private readonly routerSize = 14
   // LLM agent change: declared without initializer, created at the top of init(). The base
   // constructor calls init() from super() before TS field initializers run. See
   // DialogueChoiceRouteCanvasExtension for the fuller explanation.

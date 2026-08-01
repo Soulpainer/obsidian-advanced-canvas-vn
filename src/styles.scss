@@ -72,22 +72,26 @@
 // --interactive-accent when unset (e.g. before first render).
 .canvas-node.dialogue-canvas-router-node > .canvas-node-container {
   border-radius: 50%;
-  border: 3px solid var(--dialogue-router-color, var(--interactive-accent));
+  // LLM agent change: border/box-shadow scaled down for the smaller 14px node (was 3px / 4px on 28px).
+  border: 2px solid var(--dialogue-router-color, var(--interactive-accent));
   background: var(--background-primary);
-  box-shadow: 0 0 0 4px color-mix(in srgb, var(--dialogue-router-color, var(--interactive-accent)) 18%, transparent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--dialogue-router-color, var(--interactive-accent)) 18%, transparent);
 }
 
 .canvas-node.dialogue-canvas-router-node.dialogue-canvas-router-node-is-selected > .canvas-node-container {
-  border-width: 4px;
+  // LLM agent change: scaled down for the 14px node (was 4px / 4px / 8px on 28px).
+  border-width: 3px;
   box-shadow:
-    0 0 0 4px var(--background-primary),
-    0 0 0 8px var(--dialogue-router-color, var(--interactive-accent));
+    0 0 0 2px var(--background-primary),
+    0 0 0 4px var(--dialogue-router-color, var(--interactive-accent));
 }
 
 .canvas-node.dialogue-canvas-router-node::after {
   content: "";
   position: absolute;
-  inset: 6px;
+  // LLM agent change: inset scaled to the smaller 14px node (was 6px on a 28px node); 3px keeps a
+  // proportional inner dot.
+  inset: 3px;
 
   border-radius: 50%;
   background: var(--dialogue-router-color, var(--interactive-accent));
@@ -95,7 +99,7 @@
 }
 
 .canvas-node.dialogue-canvas-router-node.dialogue-canvas-router-node-is-selected::after {
-  inset: 5px;
+  inset: 2px;
 }
 
 // LLM agent change: distinguish the white/warning states visually — both use grey-ish colors but

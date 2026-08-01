@@ -1004,7 +1004,7 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
     preventDefault.value = true
 
     const clickPos = canvas.posFromEvt(event)
-    const routerSize = 28
+    const routerSize = 14 // LLM agent change: halved from 28 per user request
     const sourceNodeId = edgeData.fromNode!
     const targetNodeId = edgeData.toNode!
 
