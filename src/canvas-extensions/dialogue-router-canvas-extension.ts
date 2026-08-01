@@ -583,13 +583,15 @@ export default class DialogueRouterCanvasExtension extends CanvasExtension {
   }
 
   // LLM agent change: resolve the color a router NODE should be painted, based on its incoming and
-  // outgoing route edges. Rules (a "valid" edge is any route edge — choice/unbound/broken/unknown;
-  // default grey edges are ignored):
-  //   - 1 valid incoming + 1 valid outgoing of the SAME color → that color (the node "becomes" the
-  //     single choice flowing through it, including broken=red / unknown=grey).
-  //   - ≥1 incoming AND ≥1 outgoing, but colors differ or there are several → WHITE (valid but
-  //     ambiguous).
-  //   - 0 valid incoming OR 0 valid outgoing (one side empty) → GREY warning (partially connected).
+  // outgoing route edges. "Valid" edge = choice (resolvable) OR unbound — both are real, connected
+  // route lines. broken/unknown are PROBLEM states (deleted choice / no source) and are NOT valid.
+  // Rules:
+  //   - 1 valid incoming + 1 valid outgoing of the SAME color → COLORED (that color — the node
+  //     "becomes" the single route flowing through it; for unbound that color is grey).
+  //   - ≥1 valid incoming AND ≥1 valid outgoing, but colors differ or there are several → WHITE
+  //     (valid but ambiguous).
+  //   - 0 valid incoming OR 0 valid outgoing (one side empty, or only broken/unknown edges) →
+  //     GREY warning (partially connected / problem).
   //   - 0 and 0 (isolated) → GREY (we do NOT auto-delete; user decided to keep isolated nodes).
   // Returns { color: cssString, state: 'colored'|'white'|'warning' }.
   private resolveNodeColor(canvas: Canvas, node: CanvasNode): { color: string; state: "colored" | "white" | "warning" } {
@@ -641,11 +643,11 @@ export default class DialogueRouterCanvasExtension extends CanvasExtension {
     return { color: "var(--text-normal)", state: "white" }
   }
 
-  // LLM agent change: compute the RESOLVED rgb CSS color of a route edge, BUT ONLY for VALID choice
-  // routes — returns null for unbound/broken/unknown. This is the crux of node coloring: "valid"
-  // means a resolvable choice (a concrete palette color). unbound/broken/unknown are PROBLEM states,
-  // not a valid input/output. So a router with in=[choice] out=[unbound] has ONE valid input and
-  // ZERO valid outputs → grey warning (not white), matching the user's intent.
+  // LLM agent change: compute the RESOLVED rgb CSS color of a route edge, for VALID routes only.
+  // "Valid" = choice (resolvable) OR unbound — both are real, working route lines. unbound just
+  // means "not bound to a specific choice" but the route IS connected and correct.
+  // broken (choice deleted) and unknown (no source) are PROBLEM states → return null, so they
+  // don't count toward validity and a router fed only by them paints grey (warning).
   private edgeRouteColor(
     canvas: Canvas,
     _edge: CanvasEdge,
@@ -656,20 +658,20 @@ export default class DialogueRouterCanvasExtension extends CanvasExtension {
     if (!route) {
       return null // default edge — not a route
     }
-    // Only a resolvable choice counts as a valid colored endpoint.
-    if (route.type !== "choice") {
-      return null // unbound / broken / unknown — problem state, not a valid endpoint
+    // broken / unknown are problem states, not valid endpoints.
+    if (route.type === "broken" || route.type === "unknown") {
+      return null
     }
+    // choice OR unbound — both valid. Resolve the source frame's choices for a choice route (to
+    // validate it / compute its palette index); for unbound, there's nothing to resolve.
     const sourceNode = data.fromNode ? canvas.nodes.get(data.fromNode) : undefined
     const sourceData = sourceNode?.getData() as CanvasNodeDataWithDialogue | undefined
     const sourceChoices = sourceData?.["x-dialogue"]?.frame?.choices ?? []
-    // Verify the choice actually resolves against the source frame's choices (a deleted choice
-    // persisted as broken upstream is caught here too).
-    if (sourceChoices.length > 0 && !sourceChoices.some(c => c.choiceId === route.choiceId)) {
-      return null // choice doesn't resolve → not valid
+    if (route.type === "choice" && sourceChoices.length > 0 && !sourceChoices.some(c => c.choiceId === route.choiceId)) {
+      return null // choice doesn't resolve against the source frame → effectively broken
     }
     const cssVar = routeToColorCss(route, sourceChoices)
-    // Resolve to concrete rgb so visually-equal colors compare equal (see method comment).
+    // Resolve to concrete rgb so visually-equal colors compare equal.
     return resolveCssColor(cssVar)
   }
 
