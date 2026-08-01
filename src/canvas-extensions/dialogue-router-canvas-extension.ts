@@ -523,31 +523,39 @@ export default class DialogueRouterCanvasExtension extends CanvasExtension {
       return
     }
 
-    const outgoingEdges = [...canvas.edges.values()]
-      .filter(candidate => {
-        const candidateData = candidate.getData() as CanvasEdgeDataWithNodes
-        if (candidateData.fromNode !== edgeData.fromNode) {
-          return false
-        }
-        // LLM agent change: ignore edges with a FLOATING 'to' end (drag-in-progress). Such an edge
-        // isn't a real outgoing connection yet (candidate.to.node is undefined while the user is
-        // still dragging the loose end to a target). Counting it here made enforceSingleOutgoingEdge
-        // race with the spawn flow — a freshly-dragged edge could be deleted before it connected,
-        // and a spawn edge (E2) competed against the dangling drag edge (E1) and lost non-
-        // deterministically. Only fully-connected edges count toward the one-outgoing quota.
-        return candidate.to?.node != null
-      })
-      .sort((a, b) => {
-        const aId = (a.getData() as CanvasEdgeDataWithNodes).id
-        const bId = (b.getData() as CanvasEdgeDataWithNodes).id
-        return aId.localeCompare(bId)
-      })
+    // LLM agent change: a router may have only ONE outgoing edge. When a second appears, keep the
+    // one the user JUST acted on (the `edge` argument — the newest) and remove the older ones.
+    // Previously this kept the lexicographically-smallest edge id, which was non-deterministic
+    // relative to user intent: ids are arbitrary, so the "winner" was effectively random. Now
+    // "most recent wins" is explicit and intuitive — the edge just created/changed is the one the
+    // user wants; the others were superseded. (The spawn-flow's lastDragNativeEdge cleanup is still
+    // needed separately — it removes the dangling native drag edge E1, which is floating and thus
+    // filtered out below, never reaching this "competing" set.)
+    const keepId = edgeData.id
+    const extras: CanvasEdge[] = []
+    for (const candidate of canvas.edges.values()) {
+      const candidateData = candidate.getData() as CanvasEdgeDataWithNodes
+      if (candidateData.fromNode !== edgeData.fromNode) {
+        continue
+      }
+      if (candidateData.id === keepId) {
+        continue
+      }
+      // Ignore edges with a FLOATING 'to' end (drag-in-progress): candidate.to.node is undefined
+      // while the user is still dragging the loose end to a target. Counting such an edge here would
+      // delete it before it connects. Only fully-connected edges count as "competing" connections.
+      // (The edge being kept, `edge`, is exempt from this check — it may itself be mid-drag.)
+      if (candidate.to?.node == null) {
+        continue
+      }
+      extras.push(candidate)
+    }
 
-    if (outgoingEdges.length <= 1) {
+    if (extras.length === 0) {
       return
     }
 
-    for (const extraEdge of outgoingEdges.slice(1)) {
+    for (const extraEdge of extras) {
       canvas.removeEdge(extraEdge)
     }
 
