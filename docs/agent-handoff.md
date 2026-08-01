@@ -80,6 +80,8 @@ Original symptom: dragging a new edge FROM a router left it grey (no route), uns
 - Behavior when a router has a mix of incoming choice + incoming default — by design defaults are ignored, so a router with 1 choice + 1 default inherits the choice color. Confirm that's desired.
 - The earlier `saveRoute` choiceIndex-preservation fix (lesson 13) is now subsumed by `applyOutgoingRoute`, which preserves `choiceIndex` the same way.
 
+**Stale-color fix (edge retargeted):** the initial reactive listener tried to derive the affected router from the edge's current `fromNode`/`toNode`. That missed the key case: when a dragged edge is released on a *different* target, the PREVIOUS `toNode` (a router no longer connected) doesn't appear in the event, so its outgoing edges stayed colored per a now-stale incoming set. Fixed by replacing targeted recomputation with `scheduleRecomputeAllRouters` — a rAF-coalesced pass that recomputes EVERY router against the settled graph state. `routesEqual` makes the no-op case (most routers unchanged) cheap; reentrancy is bounded by the `recomputeFrames` dedup + `routesEqual` (a re-triggered second pass writes nothing). Coalescing is necessary because `edge-changed` fires on every edge render during pan/move/drag.
+
 ### 3. Edge-split sometimes breaks canvas rendering — MEDIUM
 
 Splitting a **long** edge sometimes corrupts the canvas display (nodes/edges disappear or glitch) until the canvas is reloaded. The single-`importData` rewrite helped but didn't fully fix it.
