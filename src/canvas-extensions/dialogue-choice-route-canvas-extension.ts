@@ -616,10 +616,17 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
   }
 
   private renderCanvas(canvas: Canvas) {
+    if (canvas.readonly) {
+      // LLM agent change: don't persist route changes on a readonly canvas (the broken-validation
+      // below calls setData). Only render.
+      this.renderCanvasReadOnly(canvas)
+      return
+    }
     for (const edge of canvas.edges.values()) {
       const edgeData = edge.getData() as CanvasEdgeDataWithDialogue
+      const route = this.getRoute(edgeData["x-dialogue"]?.route)
 
-      if (!this.getRoute(edgeData["x-dialogue"]?.route)) {
+      if (!route) {
         // LLM agent change: this is a DEFAULT (non-route) edge. If it used to be a route edge and
         // carries a stale palette color, clear it so the line isn't drawn in a choice color that no
         // longer corresponds to anything (e.g. a frame→router edge whose choice was deleted → its
@@ -637,6 +644,42 @@ export default class DialogueChoiceRouteCanvasExtension extends CanvasExtension 
         continue
       }
 
+      // LLM agent change: validate choice routes whose fromNode is a FRAME. If the choice was
+      // deleted from the frame, PERSIST the route as broken (red dashed) — not just render it
+      // broken. Otherwise native Obsidian re-applies the stale edge.color (palette) on its own
+      // re-render and the line stays blue despite our renderRouteEdge painting it red. Persisting
+      // {type:"broken"} into the data makes both our renderer AND native agree it's broken.
+      if (route.type === "choice" && edgeData.fromNode) {
+        const fromNode = canvas.nodes.get(edgeData.fromNode)
+        const fromData = fromNode?.getData() as CanvasNodeDataWithDialogue | undefined
+        const choices = fromData?.["x-dialogue"]?.frame?.choices
+        if (choices && !choices.some(choice => choice.choiceId === route.choiceId)) {
+          // choice gone → persist broken
+          const nextXDialogue = { ...edgeData["x-dialogue"], route: { type: "broken" as const } }
+          const nextEdgeData: CanvasEdgeDataWithDialogue = {
+            ...edgeData,
+            label: "",
+            styleAttributes: { ...edgeData.styleAttributes, path: null },
+            "x-dialogue": nextXDialogue,
+          }
+          edge.setData(nextEdgeData)
+        }
+      }
+
+      this.renderRouteEdge(canvas, edge)
+    }
+  }
+
+  // LLM agent change: read-only render path — same as renderCanvas but never calls setData (the
+  // broken-validation persistence above mutates data, which a locked canvas must not allow).
+  private renderCanvasReadOnly(canvas: Canvas) {
+    for (const edge of canvas.edges.values()) {
+      const edgeData = edge.getData() as CanvasEdgeDataWithDialogue
+      if (!this.getRoute(edgeData["x-dialogue"]?.route)) {
+        this.setEdgeLabelVisible(edge, true)
+        this.renderDefaultEdgeFromFrameRight(canvas, edge)
+        continue
+      }
       this.renderRouteEdge(canvas, edge)
     }
   }
