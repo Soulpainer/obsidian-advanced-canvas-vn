@@ -5,6 +5,7 @@
     "dev": "node esbuild.config.mjs",
     "build": "node esbuild.config.mjs production",
     "deploy": "node scripts/deploy.mjs",
+    "deploy:dialog-test": "node scripts/deploy.mjs C:/Projects/DIalogTest/DialogSystemData/.obsidian/plugins/vn-canvas",
     "lint": "eslint src/ --ext .ts,.tsx"
   },
   "devDependencies": {

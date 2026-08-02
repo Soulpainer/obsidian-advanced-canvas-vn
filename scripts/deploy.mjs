@@ -3,10 +3,12 @@
 //
 // Usage:
 //   npm run deploy
+//   npm run deploy:dialog-test
+//   node scripts/deploy.mjs C:/path/to/vault/.obsidian/plugins/vn-canvas
 //   VAULT_PLUGIN_DIR="C:/path/to/vault/.obsidian/plugins/advanced-canvas" npm run deploy
 //
-// The default target points to the MetaLor vault on this machine. Override with
-// VAULT_PLUGIN_DIR if you target a different vault.
+// The default target points to the MetaLor vault on this machine. Override via a
+// positional arg (npm run deploy -- <path>) or VAULT_PLUGIN_DIR env var.
 import { execSync } from "node:child_process"
 import { copyFileSync, existsSync, mkdirSync } from "node:fs"
 import { dirname, resolve } from "node:path"
@@ -20,7 +22,7 @@ const projectRoot = resolve(__dirname, "..")
 const DEFAULT_VAULT_PLUGIN_DIR =
   "C:/Users/Lenovo/Documents/docs/MetaLor/.obsidian/plugins/vn-canvas"
 
-const targetDir = process.env.VAULT_PLUGIN_DIR || DEFAULT_VAULT_PLUGIN_DIR
+const targetDir = process.argv[2] || process.env.VAULT_PLUGIN_DIR || DEFAULT_VAULT_PLUGIN_DIR
 const artifacts = ["main.js", "styles.css", "manifest.json"]
 
 function log(message) {
