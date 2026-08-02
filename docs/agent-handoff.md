@@ -121,6 +121,25 @@ The reactive router-transit recoloring used to be O(N·E) on **every** edge even
 
 ---
 
+## Unity pipeline (the dialogue editor feeds a Unity runtime)
+
+The canvas-plugin is the **authoring side** of a dialogue system whose **runtime** lives in a separate Unity project. The contract between them is `docs/unity-dialogue-data-format.md` (in this repo). The Unity project is a separate git repo at `C:/Projects/DIalogTest` (Unity 6 / 6000.0.77f1).
+
+**Vault → Unity data flow:**
+- The Obsidian vault lives at `C:/Projects/DIalogTest/DialogSystemData/` (inside the Unity project, next to `Assets/`). The plugin deploys there via `npm run deploy:dialog-test`.
+- The vault is the **source of truth**: `.canvas` files (dialogue graphs) + `Dialogue/*.md` (support tables: Stats/Properties/Triggers) + `Dialogue/Characters/*.md` (per-character docs: frontmatter + narrative + stat table).
+- A Unity editor importer (`Tools → Dialogue → Update Import From Vault`) reads the vault, resolves routers/routes into a clean runtime graph, and writes ScriptableObjects into `Assets/DialogRuntime/Generated/`. Routers are collapsed (transparent transit) so the runtime never sees them.
+- A **play-mode sync guard** checksums the vault before entering play; if anything changed, it offers to re-import then auto-resume into play (with a confirm).
+
+**Runtime semantics the editor must keep consistent:**
+- `checks` (stat thresholds) decide a choice's success-vs-failure outcome at click time; they do NOT hide choices.
+- `conditions` gate choice visibility (`hideWhenUnavailable`). This distinction is load-bearing — don't collapse the two in the editor UI.
+- `broken`/`unknown` route types are editor-only validation states; the runtime treats them as graph errors (logs + skips).
+
+**When changing the editor's data model:** keep `docs/unity-dialogue-data-format.md` in sync — the Unity importer is written against it, and drift silently breaks the pipeline.
+
+---
+
 ## SOLVED PROBLEMS (all user-confirmed, merged to `main`)
 
 ### 1. Router-node selection doesn't work (Delete broken) — SOLVED ✅
