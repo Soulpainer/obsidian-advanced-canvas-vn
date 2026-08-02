@@ -286,8 +286,8 @@ A routing point is a helper node used only to route lines visually:
   "id": "router-id",
   "type": "text",
   "text": "",
-  "width": 28,
-  "height": 28,
+  "width": 14,
+  "height": 14,
   "x-dialogue": {
     "router": {
       "type": "point"
@@ -429,7 +429,7 @@ Edges connect a source node to a target node. Choice binding is stored on the ed
 Route shape:
 
 ```ts
-type DialogueRouteType = "choice" | "unbound"
+type DialogueRouteType = "failure" | "choice" | "unbound" | "broken" | "unknown"
 
 interface DialogueChoiceRouteData {
   type: "choice"
@@ -483,6 +483,29 @@ Runtime interpretation:
 - An unbound edge is a **real route edge**, not a plain/decorative line. Treat it as a valid transition.
 - It has no `choiceId` / `outcome` — it does not originate from a specific choice. It typically appears on the outgoing side of a routing point (see below).
 - When resolving graph flow at a routing point: the outgoing edge may be choice OR unbound. Follow it the same way — a routing point has exactly one outgoing edge, so resolve through it regardless of type.
+
+## Editor-only Route Types (validation states)
+
+<!-- LLM agent change: documented the "broken" / "unknown" / legacy "failure" route types. These are
+editor/validation states, NOT normal runtime transitions. -->
+
+Three route types exist for editor/validation purposes and should be treated by the runtime as **graph errors**, not as valid transitions:
+
+```ts
+interface DialogueBrokenRouteData {
+  type: "broken"
+}
+
+interface DialogueUnknownRouteData {
+  type: "unknown"
+}
+```
+
+- **`"broken"`** — a router's incoming choice reference is invalid (the choice was deleted from the source frame, or all incoming routes are themselves broken). The editor renders it as a red dashed line so the broken reference is visible. **Runtime: log a validation error and do not follow this edge** — the graph is malformed; the designer must fix the dangling choice reference in the canvas.
+- **`"unknown"`** — a router has NO incoming route edges at all, so its outgoing edge has no source to inherit. The editor renders it as a grey dashed line. **Runtime: log a validation error** — the dialogue has an unreachable/disconnected segment. Do not follow this edge.
+- **`"failure"`** — a legacy type retained for migration safety. At runtime, treat a route with `type:"failure"` the same as `type:"choice"` with `outcome:"failure"` (validate the choiceId; follow the failure branch). No new data is written with bare `type:"failure"`; it only appears in old files predating the `choice`/`unbound` split.
+
+**Recommended importer behavior:** when a route of type `broken` or `unknown` is encountered, record it in the import error log and skip it (do not produce a resolved transition). The author then fixes the canvas and re-imports.
 
 ## Actions
 
@@ -643,6 +666,8 @@ edge["x-dialogue"].route.type == "choice" || edge["x-dialogue"].route.type == "u
 ```
 
 For `choice` routes, key by `choiceId`/`outcome`. For `unbound` routes (which originate from routing points with ambiguous or no incoming color), treat them as valid transitions when resolving router flow. Do NOT silently drop `unbound` edges — they are real route lines produced by the editor.
+
+Edges with `route.type == "broken"` or `"unknown"` are validation errors (see "Editor-only Route Types") — record them in the import error log and skip; do not produce a resolved transition for them.
 
 5. Resolve router nodes in route targets.
 
